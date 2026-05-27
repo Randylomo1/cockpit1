@@ -31,6 +31,8 @@ function TrackingPill({ resolved }: { resolved?: PendingSignal }) {
     </span>
   );
 }
+
+function SignalCard({ s, resolved }: { s: Signal; resolved?: PendingSignal }) {
   const decayPct = (s.decayedConfidence / Math.max(1, s.confidence)) * 100;
   const statusColor =
     s.status === "active" ? "text-[oklch(0.72_0.17_145)]"
@@ -43,6 +45,7 @@ function TrackingPill({ resolved }: { resolved?: PendingSignal }) {
         <div className="flex items-baseline gap-2">
           <span className="text-[10px] uppercase tracking-widest text-muted-foreground">MATCH</span>
           <span className="font-mono text-2xl font-black gold-text leading-none">{s.digit}</span>
+          <TrackingPill resolved={resolved} />
         </div>
         <div className="text-right">
           <div className="font-mono text-lg font-semibold">{s.decayedConfidence}%</div>
