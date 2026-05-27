@@ -186,18 +186,20 @@ export class DerivClient {
 
     if (msg.msg_type === "history" && msg.history && msg.echo_req?.ticks_history) {
       const symbol = msg.echo_req.ticks_history as MarketSymbol;
-      const prices: string[] = msg.history.prices ?? [];
+      const rawPrices: Array<string | number> = msg.history.prices ?? [];
       const times: number[] = msg.history.times ?? [];
-      const pipSize = (prices[0]?.split(".")[1]?.length) ?? 2;
+      const firstStr = rawPrices[0] != null ? String(rawPrices[0]) : "";
+      const pipSize = firstStr.includes(".") ? (firstStr.split(".")[1]?.length ?? 2) : 2;
       const now = Date.now();
-      prices.forEach((p, i) => {
+      rawPrices.forEach((p, i) => {
         const quote = Number(p);
-        const lastDigit = Number(p[p.length - 1]);
+        const quoteStr = quote.toFixed(pipSize);
+        const lastDigit = Number(quoteStr[quoteStr.length - 1]);
         const tick: Tick = {
           symbol,
           quote,
           epoch: times[i] ?? Math.floor(now / 1000),
-          receivedAt: now - (prices.length - i) * 50,
+          receivedAt: now - (rawPrices.length - i) * 50,
           lastDigit,
           pipSize,
         };
