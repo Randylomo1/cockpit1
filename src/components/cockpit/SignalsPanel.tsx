@@ -1,7 +1,36 @@
 import { useCockpit } from "@/lib/engine/store";
 import type { Signal } from "@/lib/engine/signals";
+import type { PendingSignal } from "@/lib/engine/outcomes";
 
-function SignalCard({ s }: { s: Signal }) {
+function TrackingPill({ resolved }: { resolved?: PendingSignal }) {
+  if (!resolved) {
+    return (
+      <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded border border-[var(--border)] text-muted-foreground">
+        tracking
+      </span>
+    );
+  }
+  const o = resolved.outcomes;
+  const cells: Array<{ k: string; v?: boolean }> = [
+    { k: "1", v: o.t1 }, { k: "2", v: o.t2 }, { k: "3", v: o.t3 }, { k: "5", v: o.t5 },
+  ];
+  return (
+    <span className="flex items-center gap-0.5 text-[9px] font-mono">
+      {cells.map((c) => (
+        <span
+          key={c.k}
+          className={`px-1 py-0.5 rounded ${
+            c.v ? "bg-[oklch(0.72_0.17_145)]/20 text-[oklch(0.72_0.17_145)]"
+                : "bg-[oklch(0.62_0.22_25)]/15 text-[oklch(0.62_0.22_25)]"
+          }`}
+          title={`+${c.k} ticks: ${c.v ? "win" : "loss"}`}
+        >
+          {c.v ? "✓" : "✗"}{c.k}
+        </span>
+      ))}
+    </span>
+  );
+}
   const decayPct = (s.decayedConfidence / Math.max(1, s.confidence)) * 100;
   const statusColor =
     s.status === "active" ? "text-[oklch(0.72_0.17_145)]"
