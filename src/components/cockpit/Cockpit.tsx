@@ -1,0 +1,36 @@
+import { useEffect } from "react";
+import { useCockpit } from "@/lib/engine/store";
+import { CockpitHeader } from "./Header";
+import { TickFeed } from "./TickFeed";
+import { DigitHeatmap } from "./DigitHeatmap";
+import { EngineStatus } from "./EngineStatus";
+import { SignalsPanel } from "./SignalsPanel";
+
+export function Cockpit() {
+  const connect = useCockpit((s) => s.connect);
+  const disconnect = useCockpit((s) => s.disconnect);
+
+  useEffect(() => {
+    connect();
+    return () => disconnect();
+  }, [connect, disconnect]);
+
+  return (
+    <div className="dark min-h-screen text-foreground">
+      <CockpitHeader />
+      <main className="max-w-[1500px] mx-auto p-5 grid gap-4 lg:grid-cols-3">
+        <section className="lg:col-span-2 space-y-4">
+          <TickFeed />
+          <DigitHeatmap />
+          <EngineStatus />
+        </section>
+        <aside className="lg:col-span-1">
+          <SignalsPanel />
+        </aside>
+        <footer className="lg:col-span-3 text-center text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60 pt-2">
+          Analysis only · No execution · Signal threshold 80% · Source: Deriv WS app_id 1089
+        </footer>
+      </main>
+    </div>
+  );
+}
