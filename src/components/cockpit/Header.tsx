@@ -1,5 +1,6 @@
 import { useCockpit } from "@/lib/engine/store";
 import { MARKETS } from "@/lib/deriv/markets";
+import { AccountConnect } from "./AccountConnect";
 
 export function CockpitHeader() {
   const { status, latencyMs, activeMarket, setActiveMarket } = useCockpit();
@@ -51,6 +52,7 @@ export function CockpitHeader() {
             </optgroup>
           ))}
         </select>
+        <AccountConnect />
       </div>
     </header>
   );
