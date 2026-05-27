@@ -24,6 +24,7 @@ export function Cockpit() {
           <TickFeed />
           <DigitHeatmap />
           <EngineStatus />
+          <MarketStatsStrip />
         </section>
         <aside className="lg:col-span-1">
           <SignalsPanel />
