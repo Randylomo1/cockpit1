@@ -93,6 +93,7 @@ export const DEFAULT_CONFIG: EngineConfig = {
 export class SignalEngine {
   private config: EngineConfig;
   private lastSignalAt = 0;
+  private state = new MarketStateRegistry();
 
   constructor(config: Partial<EngineConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -100,6 +101,7 @@ export class SignalEngine {
 
   updateConfig(c: Partial<EngineConfig>) { this.config = { ...this.config, ...c }; }
   getConfig() { return this.config; }
+  getMarketState(market: MarketSymbol): MarketStateRow | undefined { return this.state.get(market); }
 
   analyse(market: MarketSymbol, digits: DigitArray, tickIndex: number): EngineSnapshot {
     const w20 = buildWindow(digits, 20);
@@ -132,7 +134,7 @@ export class SignalEngine {
       .map((pd) => {
         const dominance = (w50.freq[pd.digit] - 0.1) / 0.25;
         const dominanceScore = clamp(dominance * 100, 0, 100);
-        const stat = clamp((Math.abs(pd.zScore) - 1) / 2.5, 0, 1) * 100; // z=1→0, z=3.5→100
+        const stat = clamp((Math.abs(pd.zScore) - 1) / 2.5, 0, 1) * 100;
         const streakQuality = streak.digit === pd.digit
           ? clamp(streak.length / 3, 0, 1) * 100 - clamp(streak.length - 4, 0, 5) * 15
           : pd.digit === w20.dominant ? 40 : 10;
@@ -157,6 +159,17 @@ export class SignalEngine {
       .sort((a, b) => b.confidence - a.confidence);
 
     const best = candidates[0];
+    const topMomentumDigit = [...perDigit].sort((a, b) => b.momentum - a.momentum)[0].digit;
+
+    // Update per-market rolling state (entropy baseline, dominance flips, z-trend).
+    const mstate = this.state.update(
+      market,
+      w100.entropy,
+      w20.entropy,
+      w50.dominant,
+      Math.abs(best.pd.zScore),
+    );
+
     const regime: EngineSnapshot["regime"] =
       w100.entropy > this.config.maxRegimeEntropy ? "chaotic"
         : w100.entropy < 0.93 ? "trending"
@@ -170,7 +183,16 @@ export class SignalEngine {
       regime,
     };
 
-    // Hard filters
+    // Hardened filters: existing + 4 new statistical-stability gates.
+    const entropySpike = mstate.updates > 50
+      && w20.entropy > mstate.entropyBaseline + 0.04
+      && w20.entropy > 0.97;
+    const dominanceFlipRate = mstate.flipWindow.length > 10
+      ? mstate.dominanceFlips / mstate.flipWindow.length
+      : 0;
+    const momentumDominanceConflict =
+      best.pd.digit !== w20.dominant && best.pd.digit !== w50.dominant && best.pd.digit !== topMomentumDigit;
+
     const filters: Array<[boolean, string]> = [
       [digits.length >= this.config.minSampleSize, `Warming up (${digits.length}/${this.config.minSampleSize} ticks)`],
       [regime !== "chaotic", "Chaotic regime — random distribution"],
@@ -179,6 +201,11 @@ export class SignalEngine {
       [best.confidence >= this.config.minConfidence, `Confidence ${Math.round(best.confidence)}% < ${this.config.minConfidence}%`],
       [best.pd.persistenceStability > 0.3, "Transition sample too small"],
       [Math.abs(best.pd.zScore) >= 1.2, `Z-score ${best.pd.zScore.toFixed(2)} insignificant`],
+      // Hardened gates:
+      [!entropySpike, `Entropy spike (Δ ${(w20.entropy - mstate.entropyBaseline).toFixed(3)})`],
+      [dominanceFlipRate < 0.35, `Dominance unstable (flips ${(dominanceFlipRate * 100).toFixed(0)}%)`],
+      [mstate.zTrend > -0.08, `Z-score weakening (trend ${mstate.zTrend.toFixed(2)})`],
+      [!momentumDominanceConflict, "Momentum / dominance conflict"],
     ];
     const failed = filters.find(([ok]) => !ok);
     if (failed) {
