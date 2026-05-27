@@ -5,6 +5,7 @@ import { TickFeed } from "./TickFeed";
 import { DigitHeatmap } from "./DigitHeatmap";
 import { EngineStatus } from "./EngineStatus";
 import { SignalsPanel } from "./SignalsPanel";
+import { MarketStatsStrip } from "./MarketStatsStrip";
 
 export function Cockpit() {
   const connect = useCockpit((s) => s.connect);
@@ -23,6 +24,7 @@ export function Cockpit() {
           <TickFeed />
           <DigitHeatmap />
           <EngineStatus />
+          <MarketStatsStrip />
         </section>
         <aside className="lg:col-span-1">
           <SignalsPanel />

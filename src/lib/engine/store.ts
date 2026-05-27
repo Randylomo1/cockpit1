@@ -1,11 +1,14 @@
 /**
  * Global cockpit store — Zustand.
  * Holds tick buffer per market, active market, engine config, signals, snapshot.
+ * Also drives the empirical OutcomeTracker (Wave 1) — every emitted signal
+ * is logged and graded against the next 1/2/3/5 ticks, per market.
  */
 import { create } from "zustand";
 import type { MarketSymbol } from "../deriv/markets";
 import { getDerivClient, type ConnectionStatus, type Tick } from "../deriv/ws";
 import { SignalEngine, type EngineSnapshot, type Signal, type EngineConfig } from "./signals";
+import { OutcomeTracker, type MarketOutcomeStats, type PendingSignal } from "./outcomes";
 
 const MAX_BUFFER = 1500;
 
@@ -20,6 +23,10 @@ interface CockpitState {
   snapshot: Record<MarketSymbol, EngineSnapshot | undefined>;
   signals: Signal[]; // newest first, capped
   tickIndex: number;
+  // Outcome tracking
+  outcomeStats: Record<string, MarketOutcomeStats | undefined>;
+  resolvedSignals: Record<string, PendingSignal | undefined>;
+  trackerVersion: number;
   // Actions
   setActiveMarket: (m: MarketSymbol) => void;
   connect: () => void;
@@ -30,6 +37,7 @@ interface CockpitState {
 }
 
 const engine = new SignalEngine();
+const tracker = new OutcomeTracker();
 let initialised = false;
 
 export const useCockpit = create<CockpitState>((set, get) => ({
@@ -41,6 +49,9 @@ export const useCockpit = create<CockpitState>((set, get) => ({
   snapshot: {} as any,
   signals: [],
   tickIndex: 0,
+  outcomeStats: {},
+  resolvedSignals: {},
+  trackerVersion: 0,
 
   setActiveMarket: (m) => {
     const prev = get().activeMarket;
@@ -49,7 +60,6 @@ export const useCockpit = create<CockpitState>((set, get) => ({
     set({ activeMarket: m });
     if (get().status === "open") {
       client.subscribeTicks(m);
-      // warm up history
       client.fetchHistory(m, 300).catch(() => {});
     }
   },
@@ -71,18 +81,35 @@ export const useCockpit = create<CockpitState>((set, get) => ({
 
       const tickIndex = st.tickIndex + (tick.symbol === st.activeMarket ? 1 : 0);
 
-      // Compute snapshot only for active market for perf
+      // Feed outcome tracker BEFORE computing new snapshot — so the just-arrived
+      // tick resolves any pending signals waiting on it.
+      tracker.onTick(tick.symbol, tick.lastDigit);
+
       let snapshot = st.snapshot[tick.symbol];
       let newSignals = st.signals;
       if (tick.symbol === st.activeMarket) {
         const snap = engine.analyse(tick.symbol, nextDigits, tickIndex);
         snapshot = snap;
-        // Age existing signals for this market
         let aged = engine.ageSignals(newSignals, tickIndex);
         if (snap.newSignal) {
           aged = [snap.newSignal, ...aged].slice(0, 30);
+          const topMomentumDigit = [...snap.perDigit].sort((a, b) => b.momentum - a.momentum)[0].digit;
+          tracker.track(snap.newSignal, {
+            entropy: snap.windows.w100.entropy,
+            dominantDigit: snap.windows.w50.dominant,
+            topMomentumDigit,
+          });
         }
         newSignals = aged;
+      }
+
+      // Snapshot tracker projections for React subscribers.
+      const stats: Record<string, MarketOutcomeStats | undefined> = {};
+      for (const s of tracker.getAllStats()) stats[s.market] = s;
+      const resolved: Record<string, PendingSignal | undefined> = {};
+      for (const sig of newSignals) {
+        const r = tracker.getResolved(sig.id);
+        if (r) resolved[sig.id] = r;
       }
 
       set({
@@ -92,10 +119,12 @@ export const useCockpit = create<CockpitState>((set, get) => ({
         signals: newSignals,
         tickIndex,
         latencyMs: client.getLatency(),
+        outcomeStats: stats,
+        resolvedSignals: resolved,
+        trackerVersion: tracker.version,
       });
     });
     client.connect();
-    // Wait until open, then subscribe + warm up
     const unsub = client.onStatus((s) => {
       if (s === "open") {
         const m = get().activeMarket;
@@ -103,7 +132,6 @@ export const useCockpit = create<CockpitState>((set, get) => ({
         client.fetchHistory(m, 300).catch(() => {});
       }
     });
-    // Don't unsub — we want auto re-subscribe on every reconnect.
     void unsub;
   },
 
