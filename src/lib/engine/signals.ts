@@ -9,6 +9,7 @@ import {
   type DigitArray, type WindowStats,
 } from "./analytics";
 import type { MarketSymbol } from "../deriv/markets";
+import { MarketStateRegistry, type MarketStateRow } from "./marketStats";
 
 export interface Signal {
   id: string;
