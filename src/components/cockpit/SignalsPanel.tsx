@@ -78,7 +78,7 @@ function SignalCard({ s, resolved }: { s: Signal; resolved?: PendingSignal }) {
 }
 
 export function SignalsPanel() {
-  const { signals, clearSignals, activeMarket } = useCockpit();
+  const { signals, clearSignals, activeMarket, resolvedSignals } = useCockpit();
   const marketSignals = signals.filter((s) => s.market === activeMarket);
 
   return (
@@ -99,7 +99,7 @@ export function SignalsPanel() {
             <span className="text-[11px]">The engine is being selective — fewer signals, higher quality.</span>
           </div>
         )}
-        {marketSignals.map((s) => <SignalCard key={s.id} s={s} />)}
+        {marketSignals.map((s) => <SignalCard key={s.id} s={s} resolved={resolvedSignals[s.id]} />)}
       </div>
     </div>
   );
