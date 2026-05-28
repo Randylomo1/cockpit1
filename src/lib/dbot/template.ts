@@ -130,9 +130,8 @@ export function buildDbotMatchXml({
 </xml>`;
 }
 
-/** Trigger a browser download of the generated XML and open dbot.deriv.com. */
-export function launchDbot(input: DbotTemplateInput) {
-  if (typeof window === "undefined") return;
+/** Trigger a browser download of the generated XML. Returns the filename. */
+export function downloadDbotXml(input: DbotTemplateInput): string {
   const xml = buildDbotMatchXml(input);
   const filename = `match_${input.market}_d${input.digit}.xml`;
   const blob = new Blob([xml], { type: "application/xml" });
@@ -140,9 +139,13 @@ export function launchDbot(input: DbotTemplateInput) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  window.open("https://dbot.deriv.com/", "_blank", "noopener,noreferrer");
+  return filename;
 }
+
+export const DBOT_URL = "https://dbot.deriv.com/";
+
