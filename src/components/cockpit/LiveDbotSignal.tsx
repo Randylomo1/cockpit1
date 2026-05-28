@@ -77,9 +77,35 @@ export function LiveDbotSignal() {
   const digit = activeSignal?.digit ?? snap?.topDigit ?? null;
   const confidence = activeSignal?.decayedConfidence ?? snap?.topConfidence ?? 0;
 
+  const accountStatus = useAccount((s) => s.status);
+  const bootstrap = useAccount((s) => s.bootstrap);
+  const balance = useAccount((s) => s.balance);
+  useEffect(() => { bootstrap(); }, [bootstrap]);
+  const accountConnected = accountStatus === "CONNECTED";
+  const [executing, setExecuting] = useState(false);
+
   const onDownload = () => {
     if (digit == null) return;
     downloadDbotXml({ market: activeMarket, digit, stake, durationTicks: 1 });
+  };
+
+  const onExecute = async () => {
+    if (digit == null || !accountConnected || executing) return;
+    setExecuting(true);
+    const tid = toast.loading(`Placing MATCH ${digit} · ${activeMarket} · $${stake}`);
+    try {
+      const res = await getAuthClient().buyMatch({
+        symbol: activeMarket, digit, stake, durationTicks: 1,
+      });
+      toast.success(`Trade placed · #${res.contract_id}`, {
+        id: tid,
+        description: `Stake $${res.buy_price.toFixed(2)} · Payout $${res.payout.toFixed(2)}`,
+      });
+    } catch (e: any) {
+      toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
+    } finally {
+      setExecuting(false);
+    }
   };
 
   const statusLabel = decision.ready ? "EXECUTE NOW" : "WAIT";
