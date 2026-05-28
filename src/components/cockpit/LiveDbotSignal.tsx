@@ -3,9 +3,12 @@
  * Combines the engine's strongest digit + outcome stats into a single
  * EXECUTE NOW / WAIT decision and a one-click DBot launcher.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { downloadDbotXml, DBOT_URL } from "@/lib/dbot/template";
+import { useAccount } from "@/lib/deriv/accountStore";
+import { getAuthClient } from "@/lib/deriv/authWs";
+import { toast } from "sonner";
 
 interface Decision {
   ready: boolean;
