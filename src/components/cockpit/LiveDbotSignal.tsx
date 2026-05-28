@@ -66,8 +66,8 @@ export function LiveDbotSignal() {
       entropy: snap.windows.w100.entropy,
       persistenceStability: pd?.persistenceStability ?? 0,
       regime: snap.regime,
-      winRate: stats?.t1?.winRate,
-      sample: stats?.t1?.sample,
+      winRate: stats ? stats.ewmaWin.t1 : undefined,
+      sample: stats?.totals.t1,
     });
   }, [snap, activeSignal, stats]);
 
@@ -124,11 +124,11 @@ export function LiveDbotSignal() {
             <div className="text-right text-foreground">{confidence}%</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Regime</div>
             <div className="text-right text-foreground capitalize">{snap?.regime ?? "—"}</div>
-            {stats?.t1 && stats.t1.sample >= 5 && (
+            {stats && stats.totals.t1 >= 5 && (
               <>
                 <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Hist t+1</div>
                 <div className="text-right text-foreground">
-                  {(stats.t1.winRate * 100).toFixed(0)}% · n={stats.t1.sample}
+                  {(stats.ewmaWin.t1 * 100).toFixed(0)}% · n={stats.totals.t1}
                 </div>
               </>
             )}
