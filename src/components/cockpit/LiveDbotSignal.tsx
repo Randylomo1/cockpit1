@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
-import { launchDbot } from "@/lib/dbot/template";
+import { downloadDbotXml, DBOT_URL } from "@/lib/dbot/template";
 
 interface Decision {
   ready: boolean;
@@ -74,9 +74,9 @@ export function LiveDbotSignal() {
   const digit = activeSignal?.digit ?? snap?.topDigit ?? null;
   const confidence = activeSignal?.decayedConfidence ?? snap?.topConfidence ?? 0;
 
-  const onOpenDbot = () => {
+  const onDownload = () => {
     if (digit == null) return;
-    launchDbot({ market: activeMarket, digit, stake, durationTicks: 1 });
+    downloadDbotXml({ market: activeMarket, digit, stake, durationTicks: 1 });
   };
 
   const statusLabel = decision.ready ? "EXECUTE NOW" : "WAIT";
@@ -171,16 +171,24 @@ export function LiveDbotSignal() {
         <span className="text-[10px] font-mono text-muted-foreground">USD</span>
         <div className="flex-1" />
         <button
-          onClick={onOpenDbot}
+          onClick={onDownload}
           disabled={digit == null}
           className="px-4 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold bg-[var(--gold)] text-[var(--primary-foreground)] hover:bg-[var(--gold-soft)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="Downloads the prepared MATCH bot XML and opens dbot.deriv.com — drag the file into DBot to load."
+          title="Download the prepared MATCH bot XML"
         >
-          Open in DBot →
+          ⬇ Download Bot XML
         </button>
+        <a
+          href={DBOT_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-4 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold border border-[var(--gold)] text-[var(--gold)] hover:bg-[var(--gold)]/10 transition-colors"
+        >
+          Open DBot ↗
+        </a>
       </div>
       <div className="mt-2 text-[10px] font-mono text-muted-foreground/70 leading-snug">
-        XML downloads with market <span className="text-foreground">{activeMarket}</span>, contract <span className="text-foreground">DIGITMATCH</span>, duration <span className="text-foreground">1 tick</span>, prediction <span className="text-foreground">{digit ?? "—"}</span>. In DBot click <span className="text-foreground">Load</span> → <span className="text-foreground">Local</span> and pick the file, then <span className="text-foreground">Run</span>.
+        1) Click <span className="text-foreground">Download Bot XML</span> · 2) Click <span className="text-foreground">Open DBot</span> (opens in new tab) · 3) In DBot: <span className="text-foreground">Load → Local</span>, pick the file, then <span className="text-foreground">Run</span>. Configured: market <span className="text-foreground">{activeMarket}</span>, <span className="text-foreground">DIGITMATCH</span>, 1 tick, digit <span className="text-foreground">{digit ?? "—"}</span>.
       </div>
     </div>
   );
