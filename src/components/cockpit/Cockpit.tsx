@@ -6,6 +6,7 @@ import { DigitHeatmap } from "./DigitHeatmap";
 import { EngineStatus } from "./EngineStatus";
 import { SignalsPanel } from "./SignalsPanel";
 import { MarketStatsStrip } from "./MarketStatsStrip";
+import { LiveDbotSignal } from "./LiveDbotSignal";
 
 export function Cockpit() {
   const connect = useCockpit((s) => s.connect);
@@ -20,6 +21,9 @@ export function Cockpit() {
     <div className="dark min-h-screen text-foreground">
       <CockpitHeader />
       <main className="max-w-[1500px] mx-auto p-5 grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-3">
+          <LiveDbotSignal />
+        </div>
         <section className="lg:col-span-2 space-y-4">
           <TickFeed />
           <DigitHeatmap />
