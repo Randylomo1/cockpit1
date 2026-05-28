@@ -3,9 +3,12 @@
  * Combines the engine's strongest digit + outcome stats into a single
  * EXECUTE NOW / WAIT decision and a one-click DBot launcher.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { downloadDbotXml, DBOT_URL } from "@/lib/dbot/template";
+import { useAccount } from "@/lib/deriv/accountStore";
+import { getAuthClient } from "@/lib/deriv/authWs";
+import { toast } from "sonner";
 
 interface Decision {
   ready: boolean;
@@ -74,9 +77,35 @@ export function LiveDbotSignal() {
   const digit = activeSignal?.digit ?? snap?.topDigit ?? null;
   const confidence = activeSignal?.decayedConfidence ?? snap?.topConfidence ?? 0;
 
+  const accountStatus = useAccount((s) => s.status);
+  const bootstrap = useAccount((s) => s.bootstrap);
+  const balance = useAccount((s) => s.balance);
+  useEffect(() => { bootstrap(); }, [bootstrap]);
+  const accountConnected = accountStatus === "CONNECTED";
+  const [executing, setExecuting] = useState(false);
+
   const onDownload = () => {
     if (digit == null) return;
     downloadDbotXml({ market: activeMarket, digit, stake, durationTicks: 1 });
+  };
+
+  const onExecute = async () => {
+    if (digit == null || !accountConnected || executing) return;
+    setExecuting(true);
+    const tid = toast.loading(`Placing MATCH ${digit} · ${activeMarket} · $${stake}`);
+    try {
+      const res = await getAuthClient().buyMatch({
+        symbol: activeMarket, digit, stake, durationTicks: 1,
+      });
+      toast.success(`Trade placed · #${res.contract_id}`, {
+        id: tid,
+        description: `Stake $${res.buy_price.toFixed(2)} · Payout $${res.payout.toFixed(2)}`,
+      });
+    } catch (e: any) {
+      toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
+    } finally {
+      setExecuting(false);
+    }
   };
 
   const statusLabel = decision.ready ? "EXECUTE NOW" : "WAIT";
@@ -155,11 +184,9 @@ export function LiveDbotSignal() {
         </div>
       )}
 
-      {/* DBot launcher */}
-      <div className="mt-4 pt-4 border-t border-[var(--border)] flex items-center gap-3">
-        <label className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
-          Stake
-        </label>
+      {/* Execution */}
+      <div className="mt-4 pt-4 border-t border-[var(--border)] flex flex-wrap items-center gap-3">
+        <label className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Stake</label>
         <input
           type="number"
           step="0.5"
@@ -168,27 +195,42 @@ export function LiveDbotSignal() {
           onChange={(e) => setStake(Math.max(0.35, Number(e.target.value) || 1))}
           className="w-20 bg-[var(--surface-2)] border border-[var(--border)] rounded px-2 py-1 text-sm font-mono text-foreground focus:outline-none focus:border-[var(--gold)]"
         />
-        <span className="text-[10px] font-mono text-muted-foreground">USD</span>
+        <span className="text-[10px] font-mono text-muted-foreground">
+          {balance ? `${balance.currency} · bal ${balance.balance.toFixed(2)}` : "USD"}
+        </span>
         <div className="flex-1" />
+
+        <button
+          onClick={onExecute}
+          disabled={digit == null || !accountConnected || executing || !decision.ready}
+          className="px-5 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold bg-[oklch(0.72_0.17_145)] text-black hover:brightness-110 transition disabled:opacity-30 disabled:cursor-not-allowed"
+          title={!accountConnected ? "Connect your Deriv account first" : !decision.ready ? "Wait for a valid signal" : `Buy DIGITMATCH ${digit} on ${activeMarket} for $${stake}`}
+        >
+          {executing ? "Placing…" : `▶ Execute Trade${digit != null ? ` · ${digit}` : ""}`}
+        </button>
+
         <button
           onClick={onDownload}
           disabled={digit == null}
-          className="px-4 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold bg-[var(--gold)] text-[var(--primary-foreground)] hover:bg-[var(--gold-soft)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="Download the prepared MATCH bot XML"
+          className="px-3 py-2 rounded-md font-mono text-[11px] uppercase tracking-widest border border-[var(--gold)]/60 text-[var(--gold)] hover:bg-[var(--gold)]/10 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Download MATCH bot XML for DBot"
         >
-          ⬇ Download Bot XML
+          ⬇ XML
         </button>
         <a
           href={DBOT_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="px-4 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold border border-[var(--gold)] text-[var(--gold)] hover:bg-[var(--gold)]/10 transition-colors"
+          className="px-3 py-2 rounded-md font-mono text-[11px] uppercase tracking-widest border border-[var(--border)] text-muted-foreground hover:text-foreground hover:border-[var(--gold)]/60 transition"
         >
-          Open DBot ↗
+          DBot ↗
         </a>
       </div>
+
       <div className="mt-2 text-[10px] font-mono text-muted-foreground/70 leading-snug">
-        1) Click <span className="text-foreground">Download Bot XML</span> · 2) Click <span className="text-foreground">Open DBot</span> (opens in new tab) · 3) In DBot: <span className="text-foreground">Load → Local</span>, pick the file, then <span className="text-foreground">Run</span>. Configured: market <span className="text-foreground">{activeMarket}</span>, <span className="text-foreground">DIGITMATCH</span>, 1 tick, digit <span className="text-foreground">{digit ?? "—"}</span>.
+        {accountConnected
+          ? <>Click <span className="text-foreground">Execute Trade</span> to place <span className="text-foreground">DIGITMATCH {digit ?? "—"}</span> on <span className="text-foreground">{activeMarket}</span> · 1 tick · ${stake} directly through your Deriv account.</>
+          : <>Connect your Deriv account in the header to enable one-click execution. Fallback: download the XML and load it in DBot.</>}
       </div>
     </div>
   );

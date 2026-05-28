@@ -66,6 +66,51 @@ export class DerivAuthClient {
   getAccount() { return this.account; }
   getBalance() { return this.balance; }
   getLatency() { return this.lastLatencyMs; }
+
+  /**
+   * Buy a DIGITMATCH contract directly via proposal → buy.
+   * Returns Deriv's buy response (contract_id, buy_price, payout, …).
+   */
+  async buyMatch(args: {
+    symbol: string;
+    digit: number;
+    stake: number;
+    durationTicks?: number;
+    currency?: string;
+  }): Promise<{ contract_id: number; buy_price: number; payout: number; longcode: string; transaction_id: number }> {
+    if (this.status !== "CONNECTED") throw new Error("Account not connected");
+    const currency = args.currency ?? this.account?.currency ?? "USD";
+    const duration = args.durationTicks ?? 1;
+    const stake = Math.max(0.35, Number(args.stake.toFixed(2)));
+    const digit = Math.max(0, Math.min(9, Math.round(args.digit)));
+
+    const propRes: any = await this.send({
+      proposal: 1,
+      amount: stake,
+      basis: "stake",
+      contract_type: "DIGITMATCH",
+      currency,
+      duration,
+      duration_unit: "t",
+      symbol: args.symbol,
+      barrier: String(digit),
+    });
+    if (propRes?.error) throw new Error(propRes.error.message ?? "proposal failed");
+    const proposal = propRes.proposal;
+    if (!proposal?.id) throw new Error("No proposal id returned");
+
+    const buyRes: any = await this.send({ buy: proposal.id, price: stake });
+    if (buyRes?.error) throw new Error(buyRes.error.message ?? "buy failed");
+    const b = buyRes.buy;
+    return {
+      contract_id: b.contract_id,
+      buy_price: Number(b.buy_price),
+      payout: Number(b.payout),
+      longcode: b.longcode,
+      transaction_id: b.transaction_id,
+    };
+  }
+
   getRedactedToken() { return this.token ? REDACT(this.token) : null; }
 
   onStatus(l: Listener<{ status: AuthStatus; error?: string }>) {
