@@ -131,8 +131,8 @@ export function MatchButtonGrid() {
             <button
               key={r.digit}
               onClick={() => onExecute(r.digit, r.confidence, r.stake)}
-              disabled={!armed || busy || busyDigit !== null}
-              className={`relative group rounded-lg border-2 ${glow} p-2 text-left transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed hover:scale-[1.02] hover:brightness-110`}
+              disabled={busy}
+              className={`relative group rounded-lg border-2 ${glow} p-2 text-left transition-all duration-200 disabled:opacity-60 disabled:cursor-wait hover:scale-[1.02] hover:brightness-110 ${!armed ? "opacity-70" : ""}`}
               style={{
                 background: `linear-gradient(180deg, oklch(0.78 0.13 86 / ${intensity * 0.18}), oklch(0.165 0 0))`,
               }}
