@@ -90,7 +90,23 @@ export function LiveDbotSignal() {
   };
 
   const onExecute = async () => {
-    if (digit == null || !accountConnected || executing) return;
+    if (executing) return;
+    if (digit == null) {
+      toast.error("No digit available yet — waiting for ticks");
+      return;
+    }
+    if (!accountConnected) {
+      toast.error("Connect your Deriv account first", {
+        description: `Account status: ${accountStatus}. Open the header → Connect Account.`,
+      });
+      return;
+    }
+    if (!decision.ready) {
+      toast.error("Signal not ready", {
+        description: decision.reasons.slice(0, 2).join(" · ") || "Wait for a stronger setup.",
+      });
+      return;
+    }
     setExecuting(true);
     const tid = toast.loading(`Placing MATCH ${digit} · ${activeMarket} · $${stake}`);
     try {
