@@ -197,7 +197,7 @@ export class SignalEngine {
 
     const snap: EngineSnapshot = {
       windows: { w20, w50, w100, w300 },
-      perDigit,
+      perDigit: enrichedPerDigit,
       topDigit: best.pd.digit,
       topConfidence: Math.round(best.confidence),
       regime,
