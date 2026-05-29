@@ -218,9 +218,13 @@ export function LiveDbotSignal() {
 
         <button
           onClick={onExecute}
-          disabled={digit == null || !accountConnected || executing || !decision.ready}
-          className="px-5 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold bg-[oklch(0.72_0.17_145)] text-black hover:brightness-110 transition disabled:opacity-30 disabled:cursor-not-allowed"
-          title={!accountConnected ? "Connect your Deriv account first" : !decision.ready ? "Wait for a valid signal" : `Buy DIGITMATCH ${digit} on ${activeMarket} for $${stake}`}
+          disabled={executing}
+          className={`px-5 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold transition disabled:opacity-50 disabled:cursor-not-allowed ${
+            accountConnected && decision.ready
+              ? "bg-[oklch(0.72_0.17_145)] text-black hover:brightness-110"
+              : "bg-[var(--surface-2)] text-foreground border border-[var(--border)] hover:border-[var(--gold)]/60"
+          }`}
+          title={!accountConnected ? "Click for details — account not connected" : !decision.ready ? "Click for details — signal not ready" : `Buy DIGITMATCH ${digit} on ${activeMarket} for $${stake}`}
         >
           {executing ? "Placing…" : `▶ Execute Trade${digit != null ? ` · ${digit}` : ""}`}
         </button>
