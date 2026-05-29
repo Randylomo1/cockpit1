@@ -55,6 +55,12 @@ export interface EngineSnapshot {
     clustering: number;
     persistence: number;
     persistenceStability: number;
+    /** Weighted 0..100 confidence using the same formula as the top-signal candidate. */
+    confidence: number;
+    /** Trailing consecutive run for this digit (>0 only when this digit is the last tick). */
+    streak: number;
+    /** "hot" | "cold" | "neutral" classification vs uniform 10%. */
+    temperature: "hot" | "cold" | "neutral";
   }>;
   topDigit: number;
   topConfidence: number;
@@ -130,34 +136,48 @@ export class SignalEngine {
     });
 
     // Best candidate: highest weighted preliminary score among hot digits.
-    const candidates = perDigit
-      .map((pd) => {
-        const dominance = (w50.freq[pd.digit] - 0.1) / 0.25;
-        const dominanceScore = clamp(dominance * 100, 0, 100);
-        const stat = clamp((Math.abs(pd.zScore) - 1) / 2.5, 0, 1) * 100;
-        const streakQuality = streak.digit === pd.digit
-          ? clamp(streak.length / 3, 0, 1) * 100 - clamp(streak.length - 4, 0, 5) * 15
-          : pd.digit === w20.dominant ? 40 : 10;
-        const factors = {
-          dominance: dominanceScore,
-          momentum: pd.momentum,
-          clustering: pd.clustering,
-          persistence: pd.persistence > 10 ? clamp((pd.persistence - 10) * 4, 0, 100) * pd.persistenceStability : 0,
-          statistical: stat,
-          streakQuality: clamp(streakQuality, 0, 100),
-        };
-        const W = DEFAULT_WEIGHTS;
-        const confidence =
-          factors.dominance * W.dominance +
-          factors.momentum * W.momentum +
-          factors.clustering * W.clustering +
-          factors.persistence * W.persistence +
-          factors.statistical * W.statistical +
-          factors.streakQuality * W.streakQuality;
-        return { pd, factors, confidence };
-      })
-      .sort((a, b) => b.confidence - a.confidence);
+    // Same scoring math is exposed back on `perDigit[i].confidence` so the
+    // UI (per-digit match buttons) can rank without recomputing.
+    const W = DEFAULT_WEIGHTS;
+    const scored = perDigit.map((pd) => {
+      const dominance = (w50.freq[pd.digit] - 0.1) / 0.25;
+      const dominanceScore = clamp(dominance * 100, 0, 100);
+      const stat = clamp((Math.abs(pd.zScore) - 1) / 2.5, 0, 1) * 100;
+      const streakQuality = streak.digit === pd.digit
+        ? clamp(streak.length / 3, 0, 1) * 100 - clamp(streak.length - 4, 0, 5) * 15
+        : pd.digit === w20.dominant ? 40 : 10;
+      const factors = {
+        dominance: dominanceScore,
+        momentum: pd.momentum,
+        clustering: pd.clustering,
+        persistence: pd.persistence > 10 ? clamp((pd.persistence - 10) * 4, 0, 100) * pd.persistenceStability : 0,
+        statistical: stat,
+        streakQuality: clamp(streakQuality, 0, 100),
+      };
+      const confidence =
+        factors.dominance * W.dominance +
+        factors.momentum * W.momentum +
+        factors.clustering * W.clustering +
+        factors.persistence * W.persistence +
+        factors.statistical * W.statistical +
+        factors.streakQuality * W.streakQuality;
+      return { pd, factors, confidence };
+    });
 
+    // Enrich perDigit with confidence / streak / temperature for downstream UI.
+    const enrichedPerDigit = scored.map(({ pd, confidence }) => {
+      const z = pd.zScore;
+      const temperature: "hot" | "cold" | "neutral" =
+        z >= 1.2 ? "hot" : z <= -1.2 ? "cold" : "neutral";
+      return {
+        ...pd,
+        confidence: Math.round(confidence),
+        streak: streak.digit === pd.digit ? streak.length : 0,
+        temperature,
+      };
+    });
+
+    const candidates = [...scored].sort((a, b) => b.confidence - a.confidence);
     const best = candidates[0];
     const topMomentumDigit = [...perDigit].sort((a, b) => b.momentum - a.momentum)[0].digit;
 
@@ -177,7 +197,7 @@ export class SignalEngine {
 
     const snap: EngineSnapshot = {
       windows: { w20, w50, w100, w300 },
-      perDigit,
+      perDigit: enrichedPerDigit,
       topDigit: best.pd.digit,
       topConfidence: Math.round(best.confidence),
       regime,
