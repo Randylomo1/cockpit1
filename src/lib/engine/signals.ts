@@ -55,6 +55,12 @@ export interface EngineSnapshot {
     clustering: number;
     persistence: number;
     persistenceStability: number;
+    /** Weighted 0..100 confidence using the same formula as the top-signal candidate. */
+    confidence: number;
+    /** Trailing consecutive run for this digit (>0 only when this digit is the last tick). */
+    streak: number;
+    /** "hot" | "cold" | "neutral" classification vs uniform 10%. */
+    temperature: "hot" | "cold" | "neutral";
   }>;
   topDigit: number;
   topConfidence: number;
