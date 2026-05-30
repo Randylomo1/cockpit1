@@ -69,12 +69,14 @@ export interface EngineSnapshot {
   newSignal?: Signal;
 }
 
+// Rebalanced to react fast to live ticks: clustering + momentum dominate so
+// hot digits surface in 1–2 ticks instead of waiting for long-window dominance.
 export const DEFAULT_WEIGHTS = {
-  dominance: 0.28,
-  momentum: 0.20,
-  clustering: 0.12,
-  persistence: 0.18,
-  statistical: 0.14,
+  dominance: 0.18,
+  momentum: 0.28,
+  clustering: 0.22,
+  persistence: 0.12,
+  statistical: 0.12,
   streakQuality: 0.08,
 };
 
@@ -87,13 +89,16 @@ export interface EngineConfig {
   decayPerTick: number;         // confidence points lost per tick alive
 }
 
+// Lowered thresholds for real-time MATCH trading: warm-up is short (20 ticks),
+// cooldown is tight (700 ms), and the confidence floor is reachable on live
+// streams. Hard statistical gates still block chaotic regimes.
 export const DEFAULT_CONFIG: EngineConfig = {
-  minConfidence: 80,
-  cooldownMs: 2500,
-  maxStreakForEntry: 5,
-  maxRegimeEntropy: 0.985,
-  minSampleSize: 60,
-  decayPerTick: 6,
+  minConfidence: 62,
+  cooldownMs: 700,
+  maxStreakForEntry: 6,
+  maxRegimeEntropy: 0.992,
+  minSampleSize: 20,
+  decayPerTick: 4,
 };
 
 export class SignalEngine {
