@@ -36,7 +36,7 @@ export function Cockpit() {
           <SignalsPanel />
         </aside>
         <footer className="lg:col-span-3 text-center text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60 pt-2">
-          Analysis only · No execution · Signal threshold 80% · Source: Deriv WS app_id 1089
+          Real-time MATCH tracking · Signal threshold 62% · Source: Deriv WS app_id 1089
         </footer>
       </main>
     </div>
