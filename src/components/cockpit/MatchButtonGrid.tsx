@@ -18,7 +18,7 @@ import { useAccount } from "@/lib/deriv/accountStore";
 import { getAuthClient } from "@/lib/deriv/authWs";
 import { toast } from "sonner";
 
-const EXECUTE_THRESHOLD = 70; // min per-digit confidence for the green path
+const EXECUTE_THRESHOLD = 55; // min per-digit confidence to arm one-click execute
 
 function weightedStake(confidence: number, min: number, max: number) {
   const t = Math.max(0, Math.min(1, (confidence - 50) / 50));
