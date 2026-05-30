@@ -8,6 +8,7 @@ import { SignalsPanel } from "./SignalsPanel";
 import { MarketStatsStrip } from "./MarketStatsStrip";
 import { LiveDbotSignal } from "./LiveDbotSignal";
 import { MatchButtonGrid } from "./MatchButtonGrid";
+import { MatchIntelligence } from "./MatchIntelligence";
 
 export function Cockpit() {
   const connect = useCockpit((s) => s.connect);
@@ -22,6 +23,10 @@ export function Cockpit() {
     <div className="dark min-h-screen text-foreground">
       <CockpitHeader />
       <main className="max-w-[1500px] mx-auto p-5 grid gap-4 lg:grid-cols-3">
+        {/* PRIMARY: real-time matches intelligence — single trade digit, high-confidence filter */}
+        <div className="lg:col-span-3">
+          <MatchIntelligence />
+        </div>
         <div className="lg:col-span-3">
           <LiveDbotSignal />
         </div>
@@ -36,7 +41,7 @@ export function Cockpit() {
           <SignalsPanel />
         </aside>
         <footer className="lg:col-span-3 text-center text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60 pt-2">
-          Real-time MATCH tracking · Signal threshold 62% · Source: Deriv WS app_id 1089
+          Real-time MATCH intelligence · High-conf filter score ≥ 98/100 · Source: Deriv WS app_id 1089
         </footer>
       </main>
     </div>
