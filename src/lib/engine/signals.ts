@@ -228,8 +228,8 @@ export class SignalEngine {
       [Math.abs(best.pd.zScore) >= 0.8, `Z-score ${best.pd.zScore.toFixed(2)} insignificant`],
       // Hardened gates:
       [!entropySpike, `Entropy spike (Δ ${(w20.entropy - mstate.entropyBaseline).toFixed(3)})`],
-      [dominanceFlipRate < 0.35, `Dominance unstable (flips ${(dominanceFlipRate * 100).toFixed(0)}%)`],
-      [mstate.zTrend > -0.08, `Z-score weakening (trend ${mstate.zTrend.toFixed(2)})`],
+      [dominanceFlipRate < 0.5, `Dominance unstable (flips ${(dominanceFlipRate * 100).toFixed(0)}%)`],
+      [mstate.zTrend > -0.18, `Z-score weakening (trend ${mstate.zTrend.toFixed(2)})`],
       [!momentumDominanceConflict, "Momentum / dominance conflict"],
     ];
     const failed = filters.find(([ok]) => !ok);
