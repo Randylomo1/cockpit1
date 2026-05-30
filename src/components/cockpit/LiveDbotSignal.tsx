@@ -26,11 +26,13 @@ function evaluate(args: {
   sample?: number;
 }): Decision {
   const reasons: string[] = [];
-  if (args.confidence < 90) reasons.push(`Confidence ${args.confidence}% < 90`);
-  if (Math.abs(args.zScore) < 2.2) reasons.push(`Z-score ${args.zScore.toFixed(2)} < 2.2`);
-  if (args.entropy > 0.97) reasons.push("Entropy unstable");
-  if (args.persistenceStability < 0.4) reasons.push("Persistence weakening");
-  if (args.regime !== "stable" && args.regime !== "trending") reasons.push(`Regime ${args.regime}`);
+  // Real-time MATCH thresholds — tuned to fire within a few ticks on a hot
+  // digit instead of waiting for long-window statistical perfection.
+  if (args.confidence < 70) reasons.push(`Confidence ${args.confidence}% < 70`);
+  if (Math.abs(args.zScore) < 1.2) reasons.push(`Z-score ${args.zScore.toFixed(2)} < 1.2`);
+  if (args.entropy > 0.99) reasons.push("Entropy unstable");
+  if (args.persistenceStability < 0.2) reasons.push("Persistence weakening");
+  if (args.regime === "chaotic") reasons.push(`Regime ${args.regime}`);
 
   // EQS composite (Execution Quality Score)
   const eqs = Math.round(
@@ -39,13 +41,13 @@ function evaluate(args: {
     + (1 - args.entropy) * 100 * 0.15
     + args.persistenceStability * 100 * 0.10
   );
-  if (eqs < 92) reasons.push(`EQS ${eqs} < 92`);
+  if (eqs < 72) reasons.push(`EQS ${eqs} < 72`);
 
   const ready = reasons.length === 0;
   let tier: Decision["tier"] = "—";
   if (ready) {
-    tier = eqs >= 96 && args.confidence >= 93 ? "S-TIER"
-      : eqs >= 94 ? "A-TIER" : "B-TIER";
+    tier = eqs >= 88 && args.confidence >= 85 ? "S-TIER"
+      : eqs >= 80 ? "A-TIER" : "B-TIER";
   }
   return { ready, tier, reasons };
 }
