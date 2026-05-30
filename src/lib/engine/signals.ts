@@ -224,8 +224,8 @@ export class SignalEngine {
       [Date.now() - this.lastSignalAt >= this.config.cooldownMs, "Cooldown active"],
       [!(streak.digit === best.pd.digit && streak.length > this.config.maxStreakForEntry), `Streak exhausted (${streak.length})`],
       [best.confidence >= this.config.minConfidence, `Confidence ${Math.round(best.confidence)}% < ${this.config.minConfidence}%`],
-      [best.pd.persistenceStability > 0.3, "Transition sample too small"],
-      [Math.abs(best.pd.zScore) >= 1.2, `Z-score ${best.pd.zScore.toFixed(2)} insignificant`],
+      [best.pd.persistenceStability > 0.15, "Transition sample too small"],
+      [Math.abs(best.pd.zScore) >= 0.8, `Z-score ${best.pd.zScore.toFixed(2)} insignificant`],
       // Hardened gates:
       [!entropySpike, `Entropy spike (Δ ${(w20.entropy - mstate.entropyBaseline).toFixed(3)})`],
       [dominanceFlipRate < 0.35, `Dominance unstable (flips ${(dominanceFlipRate * 100).toFixed(0)}%)`],
