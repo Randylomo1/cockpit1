@@ -293,6 +293,12 @@ export class DerivAuthClient {
       this.balance = { balance: Number(msg.balance.balance), currency: msg.balance.currency };
       this.balanceListeners.forEach((l) => l(this.balance));
     }
+
+    if (msg.msg_type === "proposal_open_contract") {
+      for (const [, l] of this.contractListeners) {
+        try { l(msg); } catch {}
+      }
+    }
   }
 
   private failAllPending(err: Error) {
