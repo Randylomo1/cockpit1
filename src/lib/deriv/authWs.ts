@@ -58,6 +58,7 @@ export class DerivAuthClient {
   private statusListeners = new Set<Listener<{ status: AuthStatus; error?: string }>>();
   private accountListeners = new Set<Listener<AuthAccount | null>>();
   private balanceListeners = new Set<Listener<AuthBalance | null>>();
+  private contractListeners = new Map<number, (msg: any) => void>();
 
   // ──────── public api ────────
 
