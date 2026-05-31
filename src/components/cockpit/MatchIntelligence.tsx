@@ -44,11 +44,41 @@ export function MatchIntelligence() {
   const accountConnected = accountStatus === "CONNECTED";
 
   const best = scan.best;
-  const showDigit = scan.highConfidence && best;
+  /**
+   * Stable live candidate logic:
+   * - Always surface the top-ranked digit as soon as the stream has a small sample.
+   * - Keep the last presented digit unless the newcomer is materially better.
+   * This prevents the main trade digit from staying blank or flickering too often.
+   */
+  const [presentedDigit, setPresentedDigit] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!best) return;
+    setPresentedDigit((current) => {
+      if (current == null) return best.digit;
+      if (current === best.digit) return current;
+
+      const currentRank = scan.ranks.find((rank) => rank.digit === current);
+      const currentScore = currentRank?.score ?? 0;
+      const scoreUpgrade = best.score - currentScore;
+
+      // Switch only when the new leader clearly outclasses the current one.
+      if (scoreUpgrade >= 8 || scan.dominanceGap >= 12 || best.rank === 1 && best.score >= 82) {
+        return best.digit;
+      }
+
+      return current;
+    });
+  }, [best, scan.dominanceGap, scan.ranks]);
+
+  const displayedRank = presentedDigit == null
+    ? best
+    : scan.ranks.find((rank) => rank.digit === presentedDigit) ?? best;
+  const showDigit = displayedRank;
 
   const onExecute = async () => {
     if (executing) return;
-    if (!best) { toast.error("No candidate yet — waiting for ticks"); return; }
+    if (!showDigit) { toast.error("No candidate yet — waiting for ticks"); return; }
     if (!accountConnected) {
       toast.error("Connect your Deriv account first", { description: `Status: ${accountStatus}` });
       return;
@@ -60,10 +90,10 @@ export function MatchIntelligence() {
       return;
     }
     setExecuting(true);
-    const tid = toast.loading(`Placing MATCH ${best.digit} · ${activeMarket} · $${stake}`);
+    const tid = toast.loading(`Placing MATCH ${showDigit.digit} · ${activeMarket} · $${stake}`);
     try {
       const res = await getAuthClient().buyMatch({
-        symbol: activeMarket, digit: best.digit, stake, durationTicks: 1,
+        symbol: activeMarket, digit: showDigit.digit, stake, durationTicks: 1,
       });
       toast.success(`Trade placed · #${res.contract_id}`, {
         id: tid,
@@ -105,19 +135,19 @@ export function MatchIntelligence() {
           </div>
           <div
             className={`font-mono font-black leading-none ${showDigit ? "gold-text" : "text-muted-foreground/40"}`}
-            style={{ fontSize: "8rem", letterSpacing: "-0.05em" }}
+            style={{ fontSize: "8rem" }}
           >
-            {showDigit ? best!.digit : "—"}
+            {showDigit ? showDigit.digit : "—"}
           </div>
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mt-1">
-            {showDigit ? `Score ${best!.score}/100` : "no high-conf setup"}
+            {showDigit ? `Signal Quality Score ${showDigit.score}/100` : "warming up live stream"}
           </div>
         </div>
 
         <div className="space-y-2">
           {showDigit ? (
-            <div className={`text-3xl font-mono font-bold ${STRENGTH_COLOR.EXTREME} uppercase tracking-wider`}>
-              HIGH-CONFIDENCE SETUP
+            <div className={`text-3xl font-mono font-bold ${scan.highConfidence ? STRENGTH_COLOR.EXTREME : STRENGTH_COLOR[scan.strength]} uppercase tracking-wider`}>
+              {scan.highConfidence ? "HIGH-CONFIDENCE SETUP" : "LIVE TRADE DIGIT"}
             </div>
           ) : (
             <div className="text-xl font-mono font-bold text-muted-foreground/80 uppercase tracking-wider">
@@ -130,11 +160,11 @@ export function MatchIntelligence() {
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Last Tick</div>
             <div className="text-right text-foreground">{tick?.lastDigit ?? "—"} · {tick?.quote.toFixed(4) ?? "—"}</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Strength</div>
-            <div className={`text-right font-semibold ${best ? STRENGTH_COLOR[scan.strength] : "text-muted-foreground"}`}>
-              {best ? scan.strength : "—"}
+            <div className={`text-right font-semibold ${showDigit ? STRENGTH_COLOR[scan.strength] : "text-muted-foreground"}`}>
+              {showDigit ? scan.strength : "—"}
             </div>
-            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Confidence</div>
-            <div className="text-right text-foreground">{best?.confidence ?? 0}%</div>
+            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Signal Quality</div>
+            <div className="text-right text-foreground">{showDigit?.score ?? 0}/100</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Rank #1 gap</div>
             <div className="text-right text-foreground">+{scan.dominanceGap}</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Ticks analysed</div>
@@ -251,9 +281,9 @@ export function MatchIntelligence() {
           }`}
           title={!accountConnected ? "Click for details — account not connected"
             : !scan.highConfidence ? "Click for details — no high-confidence setup"
-            : `Buy DIGITMATCH ${best?.digit} on ${activeMarket} for $${stake}`}
+            : `Buy DIGITMATCH ${showDigit?.digit} on ${activeMarket} for $${stake}`}
         >
-          {executing ? "Placing…" : `▶ Execute Match${showDigit ? ` · ${best!.digit}` : ""}`}
+          {executing ? "Placing…" : `▶ Execute Match${showDigit ? ` · ${showDigit.digit}` : ""}`}
         </button>
       </div>
 
