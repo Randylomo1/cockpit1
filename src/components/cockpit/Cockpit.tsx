@@ -41,7 +41,7 @@ export function Cockpit() {
           <SignalsPanel />
         </aside>
         <footer className="lg:col-span-3 text-center text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60 pt-2">
-          Real-time MATCH intelligence · High-conf filter score ≥ 98/100 · Source: Deriv WS app_id 1089
+          Real-time MATCH intelligence · Composite 35/30/25/10 · Threshold ≥ 78/100 · Source: Deriv WS app_id 1089
         </footer>
       </main>
     </div>
