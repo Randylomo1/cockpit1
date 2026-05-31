@@ -1,17 +1,16 @@
 /**
  * MATCH INTELLIGENCE — primary cockpit panel.
  *
- * Reads the live tick buffer from the cockpit store, runs scanMatches()
- * on EVERY tick, and renders:
- *   - the single current Trade Digit (or "no setup" silence)
- *   - signal strength, score, confidence, entry status
- *   - top 3 ranked digits
- *   - live frequency table (counts + rate per window)
- *   - one-click execute (DIGITMATCH on the active market)
- *
- * No prediction. No AI. Pure rolling statistics.
+ * - Runs scanMatches() on every incoming tick (microseconds, O(10×window)).
+ * - Displays the current Trade Digit, ranking, frequency table.
+ * - Manual one-click execute via DIGITMATCH.
+ * - Optional AUTO-TRADE toggle with full risk controls:
+ *     stake · take-profit · stop-loss · max consecutive losses ·
+ *     min seconds between trades.
+ * - Tracks settled contracts for live performance metrics
+ *   (wins, losses, win-rate, net P/L).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { scanMatches, HIGH_CONF_THRESHOLD, type SignalStrength } from "@/lib/engine/matchScanner";
 import { useAccount } from "@/lib/deriv/accountStore";
@@ -26,30 +25,45 @@ const STRENGTH_COLOR: Record<SignalStrength, string> = {
   EXTREME: "text-[oklch(0.72_0.17_145)]",
 };
 
+interface Perf {
+  trades: number;
+  wins: number;
+  losses: number;
+  netPnL: number;
+  consecLosses: number;
+}
+
 export function MatchIntelligence() {
   const { activeMarket, digits, lastTick } = useCockpit();
   const buffer = digits[activeMarket] ?? [];
   const tick = lastTick[activeMarket];
 
-  // scanMatches runs every render — which is every tick because the cockpit
-  // store sets new state on every incoming tick. O(10 × window), microseconds.
   const scan = useMemo(() => scanMatches(buffer), [buffer]);
 
+  // ─── Trade params ─────────────────────────────────────────────────────────
   const [stake, setStake] = useState(1);
-  const [executing, setExecuting] = useState(false);
+  const [autoTrade, setAutoTrade] = useState(false);
+  const [takeProfit, setTakeProfit] = useState(20);   // session $
+  const [stopLoss, setStopLoss] = useState(15);       // session $
+  const [maxConsecLosses, setMaxConsecLosses] = useState(3);
+  const [minIntervalSec, setMinIntervalSec] = useState(4);
+
+  // ─── Account ──────────────────────────────────────────────────────────────
   const accountStatus = useAccount((s) => s.status);
   const bootstrap = useAccount((s) => s.bootstrap);
   const balance = useAccount((s) => s.balance);
   useEffect(() => { bootstrap(); }, [bootstrap]);
   const accountConnected = accountStatus === "CONNECTED";
 
+  // ─── Performance ──────────────────────────────────────────────────────────
+  const [perf, setPerf] = useState<Perf>({
+    trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0,
+  });
+  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("IDLE");
+  const [pausedReason, setPausedReason] = useState<string | null>(null);
+
+  // ─── Stable presented digit (hysteresis to prevent flicker) ───────────────
   const best = scan.best;
-  /**
-   * Stable live candidate logic:
-   * - Always surface the top-ranked digit as soon as the stream has a small sample.
-   * - Keep the last presented digit unless the newcomer is materially better.
-   * This prevents the main trade digit from staying blank or flickering too often.
-   */
   const [presentedDigit, setPresentedDigit] = useState<number | null>(null);
 
   useEffect(() => {
@@ -57,55 +71,114 @@ export function MatchIntelligence() {
     setPresentedDigit((current) => {
       if (current == null) return best.digit;
       if (current === best.digit) return current;
-
-      const currentRank = scan.ranks.find((rank) => rank.digit === current);
-      const currentScore = currentRank?.score ?? 0;
-      const scoreUpgrade = best.score - currentScore;
-
-      // Switch only when the new leader clearly outclasses the current one.
-      if (scoreUpgrade >= 8 || scan.dominanceGap >= 12 || best.rank === 1 && best.score >= 82) {
-        return best.digit;
-      }
-
+      const cur = scan.ranks.find((r) => r.digit === current);
+      const upgrade = best.score - (cur?.score ?? 0);
+      if (upgrade >= 6 || scan.dominanceGap >= 10) return best.digit;
       return current;
     });
   }, [best, scan.dominanceGap, scan.ranks]);
 
   const displayedRank = presentedDigit == null
     ? best
-    : scan.ranks.find((rank) => rank.digit === presentedDigit) ?? best;
+    : scan.ranks.find((r) => r.digit === presentedDigit) ?? best;
   const showDigit = displayedRank;
 
-  const onExecute = async () => {
-    if (executing) return;
-    if (!showDigit) { toast.error("No candidate yet — waiting for ticks"); return; }
-    if (!accountConnected) {
-      toast.error("Connect your Deriv account first", { description: `Status: ${accountStatus}` });
-      return;
-    }
-    if (!scan.highConfidence) {
-      toast.error("Signal not high-confidence", {
-        description: scan.reasons.slice(0, 2).join(" · ") || "Wait for setup.",
-      });
-      return;
-    }
-    setExecuting(true);
-    const tid = toast.loading(`Placing MATCH ${showDigit.digit} · ${activeMarket} · $${stake}`);
+  // ─── Risk gate ────────────────────────────────────────────────────────────
+  const checkRiskGate = (): string | null => {
+    if (perf.netPnL >= takeProfit) return `Take-profit hit (+$${perf.netPnL.toFixed(2)})`;
+    if (perf.netPnL <= -stopLoss) return `Stop-loss hit (-$${Math.abs(perf.netPnL).toFixed(2)})`;
+    if (perf.consecLosses >= maxConsecLosses) return `Max ${maxConsecLosses} consecutive losses`;
+    return null;
+  };
+
+  // ─── Core executor (manual + auto share this) ─────────────────────────────
+  const inFlight = useRef(false);
+  const lastTradeAt = useRef<number>(0);
+
+  const executeTrade = async (digit: number) => {
+    if (inFlight.current) return;
+    if (!accountConnected) { toast.error("Connect your Deriv account first"); return; }
+    const risk = checkRiskGate();
+    if (risk) { setTradeStatus("PAUSED"); setPausedReason(risk); toast.error(risk); return; }
+
+    inFlight.current = true;
+    setTradeStatus("EXECUTING");
+    lastTradeAt.current = Date.now();
+    const tid = toast.loading(`MATCH ${digit} · ${activeMarket} · $${stake}`);
     try {
       const res = await getAuthClient().buyMatch({
-        symbol: activeMarket, digit: showDigit.digit, stake, durationTicks: 1,
+        symbol: activeMarket, digit, stake, durationTicks: 1,
       });
       toast.success(`Trade placed · #${res.contract_id}`, {
         id: tid,
         description: `Stake $${res.buy_price.toFixed(2)} · Payout $${res.payout.toFixed(2)}`,
       });
+      setTradeStatus("OPEN");
+      // Await settlement → update perf
+      try {
+        const settled = await getAuthClient().awaitSettlement(res.contract_id);
+        const win = settled.profit > 0;
+        setPerf((p) => ({
+          trades: p.trades + 1,
+          wins: p.wins + (win ? 1 : 0),
+          losses: p.losses + (win ? 0 : 1),
+          netPnL: p.netPnL + settled.profit,
+          consecLosses: win ? 0 : p.consecLosses + 1,
+        }));
+        setTradeStatus("SETTLED");
+        toast[win ? "success" : "error"](
+          `${win ? "WIN" : "LOSS"} · ${settled.profit >= 0 ? "+" : ""}$${settled.profit.toFixed(2)}`
+        );
+      } catch (e: any) {
+        toast.error("Settlement tracking lost", { description: String(e?.message ?? e) });
+        setTradeStatus("IDLE");
+      }
     } catch (e: any) {
       toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
+      setTradeStatus("IDLE");
     } finally {
-      setExecuting(false);
+      inFlight.current = false;
     }
   };
 
+  // ─── Auto-trade loop: react to high-confidence scans ──────────────────────
+  useEffect(() => {
+    if (!autoTrade) return;
+    if (!accountConnected) return;
+    if (inFlight.current) return;
+    if (!scan.highConfidence || !showDigit) return;
+
+    const risk = checkRiskGate();
+    if (risk) { setTradeStatus("PAUSED"); setPausedReason(risk); return; }
+
+    const since = (Date.now() - lastTradeAt.current) / 1000;
+    if (since < minIntervalSec) return;
+
+    setPausedReason(null);
+    void executeTrade(showDigit.digit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit]);
+
+  // Live status when idle
+  useEffect(() => {
+    if (inFlight.current) return;
+    if (tradeStatus === "PAUSED") return;
+    setTradeStatus(scan.highConfidence ? "ANALYZING" : "ANALYZING");
+  }, [scan.highConfidence, tradeStatus]);
+
+  const onManualExecute = () => {
+    if (!showDigit) { toast.error("No candidate yet"); return; }
+    void executeTrade(showDigit.digit);
+  };
+
+  const resetSession = () => {
+    setPerf({ trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0 });
+    setPausedReason(null);
+    setTradeStatus("IDLE");
+    toast.success("Session reset");
+  };
+
+  // ─── Styles ───────────────────────────────────────────────────────────────
   const entryColor =
     scan.entry === "ENTER NOW" ? "text-[oklch(0.72_0.17_145)]" :
     scan.entry === "PREPARING" ? "text-[oklch(0.85_0.18_85)]" :
@@ -115,15 +188,33 @@ export function MatchIntelligence() {
     ? "border-[var(--gold)] shadow-[0_0_50px_-10px_var(--gold)]"
     : "border-[var(--border)]";
 
+  const winRate = perf.trades > 0 ? (perf.wins / perf.trades) * 100 : 0;
+  const pnlColor = perf.netPnL > 0 ? "text-[oklch(0.72_0.17_145)]"
+    : perf.netPnL < 0 ? "text-[oklch(0.62_0.22_25)]" : "text-foreground";
+
+  const statusBadge = {
+    IDLE: "text-muted-foreground",
+    ANALYZING: "text-muted-foreground",
+    EXECUTING: "text-[oklch(0.85_0.18_85)]",
+    OPEN: "text-[oklch(0.85_0.18_85)]",
+    SETTLED: "text-foreground",
+    PAUSED: "text-[oklch(0.62_0.22_25)]",
+  }[tradeStatus];
+
   return (
     <div className={`glass rounded-xl p-5 border-2 ${borderClass} transition-all duration-200`}>
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
           Match Intelligence · Real-Time Scanner
         </div>
-        <div className={`text-[10px] font-mono uppercase tracking-widest ${entryColor}`}>
-          ● {scan.entry}
+        <div className="flex items-center gap-4">
+          <div className={`text-[10px] font-mono uppercase tracking-widest ${statusBadge}`}>
+            ◉ {tradeStatus}{pausedReason ? ` — ${pausedReason}` : ""}
+          </div>
+          <div className={`text-[10px] font-mono uppercase tracking-widest ${entryColor}`}>
+            ● {scan.entry}
+          </div>
         </div>
       </div>
 
@@ -163,8 +254,12 @@ export function MatchIntelligence() {
             <div className={`text-right font-semibold ${showDigit ? STRENGTH_COLOR[scan.strength] : "text-muted-foreground"}`}>
               {showDigit ? scan.strength : "—"}
             </div>
-            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Signal Quality</div>
-            <div className="text-right text-foreground">{showDigit?.score ?? 0}/100</div>
+            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Persistence</div>
+            <div className="text-right text-foreground">{showDigit?.persistence ?? 0}/100</div>
+            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Momentum</div>
+            <div className="text-right text-foreground">{showDigit ? (showDigit.momentum > 0 ? "+" : "") + showDigit.momentum : "—"}</div>
+            <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Streak</div>
+            <div className="text-right text-foreground">{showDigit?.streak ?? 0}</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Rank #1 gap</div>
             <div className="text-right text-foreground">+{scan.dominanceGap}</div>
             <div className="text-muted-foreground uppercase tracking-widest text-[10px]">Ticks analysed</div>
@@ -173,11 +268,11 @@ export function MatchIntelligence() {
         </div>
       </div>
 
-      {/* Reasons / filter status when not firing */}
+      {/* Reasons (when not firing) */}
       {!scan.highConfidence && scan.reasons.length > 0 && (
         <div className="mt-4 pt-3 border-t border-[var(--border)]">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1.5">
-            Filter Status (need ALL to pass · threshold {HIGH_CONF_THRESHOLD})
+            Filter Status · need ALL · threshold {HIGH_CONF_THRESHOLD}/100
           </div>
           <div className="flex flex-wrap gap-1.5">
             {scan.reasons.map((r) => (
@@ -189,6 +284,15 @@ export function MatchIntelligence() {
           </div>
         </div>
       )}
+
+      {/* Performance */}
+      <div className="mt-4 pt-4 border-t border-[var(--border)] grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <Stat label="Trades" value={String(perf.trades)} />
+        <Stat label="Wins" value={String(perf.wins)} tone="text-[oklch(0.72_0.17_145)]" />
+        <Stat label="Losses" value={String(perf.losses)} tone="text-[oklch(0.62_0.22_25)]" />
+        <Stat label="Win Rate" value={`${winRate.toFixed(0)}%`} />
+        <Stat label="Net P/L" value={`${perf.netPnL >= 0 ? "+" : ""}$${perf.netPnL.toFixed(2)}`} tone={pnlColor} />
+      </div>
 
       {/* Top 3 ranking */}
       <div className="mt-4 pt-4 border-t border-[var(--border)]">
@@ -212,6 +316,7 @@ export function MatchIntelligence() {
                 <div className="text-right text-[10px] text-muted-foreground leading-tight">
                   <div>f₂₀ {(r.freqShort * 100).toFixed(0)}%</div>
                   <div>mom {r.momentum > 0 ? "+" : ""}{r.momentum}</div>
+                  <div>per {r.persistence}</div>
                 </div>
               </div>
             </div>
@@ -233,7 +338,9 @@ export function MatchIntelligence() {
                 <th className="text-right">f₂₀</th>
                 <th className="text-right">f₅₀</th>
                 <th className="text-right">f₁₀₀</th>
-                <th className="text-right">f₃₀₀</th>
+                <th className="text-right">f₂₀₀</th>
+                <th className="text-right">Mom</th>
+                <th className="text-right">Per</th>
                 <th className="text-right">Score</th>
               </tr>
             </thead>
@@ -250,6 +357,10 @@ export function MatchIntelligence() {
                     <td className="text-right text-muted-foreground">{(r.freqMedium * 100).toFixed(0)}%</td>
                     <td className="text-right text-muted-foreground">{(r.freqLong * 100).toFixed(0)}%</td>
                     <td className="text-right text-muted-foreground">{(r.freqStable * 100).toFixed(0)}%</td>
+                    <td className={`text-right ${r.momentum > 0 ? "text-[oklch(0.72_0.17_145)]" : "text-muted-foreground"}`}>
+                      {r.momentum > 0 ? "+" : ""}{r.momentum}
+                    </td>
+                    <td className="text-right text-muted-foreground">{r.persistence}</td>
                     <td className="text-right text-foreground">{r.score}</td>
                   </tr>
                 );
@@ -259,38 +370,88 @@ export function MatchIntelligence() {
         </div>
       </div>
 
+      {/* Risk controls */}
+      <div className="mt-4 pt-4 border-t border-[var(--border)]">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">
+          Risk Controls · Session
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono">
+          <NumberField label="Stake $" value={stake} setValue={setStake} min={0.35} step={0.5} />
+          <NumberField label="Take Profit $" value={takeProfit} setValue={setTakeProfit} min={0} step={1} />
+          <NumberField label="Stop Loss $" value={stopLoss} setValue={setStopLoss} min={0} step={1} />
+          <NumberField label="Max Loss Streak" value={maxConsecLosses} setValue={setMaxConsecLosses} min={1} step={1} />
+          <NumberField label="Min Interval s" value={minIntervalSec} setValue={setMinIntervalSec} min={0} step={1} />
+        </div>
+      </div>
+
       {/* Execution */}
       <div className="mt-4 pt-4 border-t border-[var(--border)] flex flex-wrap items-center gap-3">
-        <label className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Stake</label>
-        <input
-          type="number" step="0.5" min="0.35" value={stake}
-          onChange={(e) => setStake(Math.max(0.35, Number(e.target.value) || 1))}
-          className="w-20 bg-[var(--surface-2)] border border-[var(--border)] rounded px-2 py-1 text-sm font-mono text-foreground focus:outline-none focus:border-[var(--gold)]"
-        />
         <span className="text-[10px] font-mono text-muted-foreground">
           {balance ? `${balance.currency} · bal ${balance.balance.toFixed(2)}` : "USD"}
         </span>
+        <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-muted-foreground select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoTrade}
+            onChange={(e) => {
+              setAutoTrade(e.target.checked);
+              if (e.target.checked) setPausedReason(null);
+            }}
+            className="accent-[var(--gold)] w-4 h-4"
+          />
+          Auto-trade {autoTrade ? "ON" : "OFF"}
+        </label>
+        <button
+          onClick={resetSession}
+          className="px-3 py-1 rounded-md font-mono text-[10px] uppercase tracking-widest text-muted-foreground border border-[var(--border)] hover:border-[var(--gold)]/60"
+        >
+          Reset session
+        </button>
         <div className="flex-1" />
         <button
-          onClick={onExecute}
-          disabled={executing}
+          onClick={onManualExecute}
+          disabled={inFlight.current}
           className={`px-5 py-2 rounded-md font-mono text-xs uppercase tracking-widest font-bold transition disabled:opacity-50 disabled:cursor-not-allowed ${
             accountConnected && scan.highConfidence
               ? "bg-[oklch(0.72_0.17_145)] text-black hover:brightness-110"
               : "bg-[var(--surface-2)] text-foreground border border-[var(--border)] hover:border-[var(--gold)]/60"
           }`}
-          title={!accountConnected ? "Click for details — account not connected"
-            : !scan.highConfidence ? "Click for details — no high-confidence setup"
-            : `Buy DIGITMATCH ${showDigit?.digit} on ${activeMarket} for $${stake}`}
+          title={!accountConnected ? "Account not connected"
+            : !showDigit ? "Waiting for candidate"
+            : `Buy DIGITMATCH ${showDigit.digit} on ${activeMarket} for $${stake}`}
         >
-          {executing ? "Placing…" : `▶ Execute Match${showDigit ? ` · ${showDigit.digit}` : ""}`}
+          {inFlight.current ? "Placing…" : `▶ Execute Match${showDigit ? ` · ${showDigit.digit}` : ""}`}
         </button>
       </div>
 
       <div className="mt-2 text-[10px] font-mono text-muted-foreground/70 leading-snug">
-        Real-time statistical scoring — no prediction. Signal fires only when score ≥ {HIGH_CONF_THRESHOLD}/100 AND all filters align.
-        Past frequency does not guarantee future ticks; trade responsibly.
+        Real-time statistical scoring — no prediction. Auto-trade fires only when score ≥ {HIGH_CONF_THRESHOLD}/100,
+        all filters align, and risk gates are clear. Past frequency does not guarantee future ticks.
       </div>
     </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="rounded border border-[var(--border)] bg-[var(--surface-2)]/30 p-2">
+      <div className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className={`font-mono text-base font-bold ${tone ?? "text-foreground"}`}>{value}</div>
+    </div>
+  );
+}
+
+function NumberField({
+  label, value, setValue, min, step,
+}: { label: string; value: number; setValue: (v: number) => void; min: number; step: number }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-muted-foreground uppercase tracking-widest">{label}</span>
+      <input
+        type="number" min={min} step={step} value={value}
+        onChange={(e) => setValue(Math.max(min, Number(e.target.value) || min))}
+        className="bg-[var(--surface-2)] border border-[var(--border)] rounded px-2 py-1 text-foreground focus:outline-none focus:border-[var(--gold)]"
+      />
+    </label>
   );
 }
