@@ -111,6 +111,47 @@ export class DerivAuthClient {
     };
   }
 
+  /**
+   * Subscribe to a contract until it is sold/settled. Resolves with the
+   * final profit (positive = win, negative = loss).
+   */
+  awaitSettlement(contract_id: number, timeoutMs = 60_000): Promise<{ profit: number; status: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("auth ws not open"));
+        return;
+      }
+      const id = this.reqId++;
+      let subId: string | null = null;
+      let done = false;
+      const finish = (err: Error | null, val?: { profit: number; status: string }) => {
+        if (done) return;
+        done = true;
+        this.contractListeners.delete(id);
+        if (subId) { try { this.send({ forget: subId }); } catch {} }
+        if (err) reject(err); else resolve(val!);
+      };
+      const timer = setTimeout(() => finish(new Error("settlement timeout")), timeoutMs);
+      this.contractListeners.set(id, (msg) => {
+        if (msg?.subscription?.id) subId = msg.subscription.id;
+        const poc = msg?.proposal_open_contract;
+        if (!poc || poc.contract_id !== contract_id) return;
+        if (poc.is_sold || poc.status === "won" || poc.status === "lost") {
+          clearTimeout(timer);
+          finish(null, { profit: Number(poc.profit ?? 0), status: String(poc.status ?? "settled") });
+        }
+      });
+      try {
+        this.ws.send(JSON.stringify({
+          proposal_open_contract: 1, contract_id, subscribe: 1, req_id: id,
+        }));
+      } catch (e: any) {
+        clearTimeout(timer);
+        finish(e);
+      }
+    });
+  }
+
   getRedactedToken() { return this.token ? REDACT(this.token) : null; }
 
   onStatus(l: Listener<{ status: AuthStatus; error?: string }>) {
