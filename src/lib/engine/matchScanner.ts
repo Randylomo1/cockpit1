@@ -28,8 +28,11 @@ const EXPECTED = 0.10;
 /** Score ≥ this triggers ENTER NOW. Tunable. */
 export const HIGH_CONF_THRESHOLD = 98;
 
-/** Minimum ticks before we even bother ranking (avoids cold-start noise). */
-export const MIN_TICKS = 20;
+/**
+ * Minimum ticks before we consider the ranking reasonably warmed up.
+ * Kept intentionally low so the cockpit can surface a live candidate fast.
+ */
+export const MIN_TICKS = 8;
 
 /** Required gap between rank 1 and rank 2 for a HIGH-CONFIDENCE signal. */
 const MIN_DOMINANCE_GAP = 10;
@@ -249,9 +252,11 @@ export function scanMatches(digits: number[]): MatchScan {
   }
 
   // Entry status: ENTER NOW only on high-confidence; PREPARING when close.
+  // The UI can still display the live top-ranked digit before this point,
+  // but execution-readiness remains a stricter state than simple ranking.
   let entry: EntryStatus = "WAIT";
   if (highConfidence) entry = "ENTER NOW";
-  else if (best && best.score >= 80 && filters.momentumShort && filters.dominanceGap) {
+  else if (best && best.score >= 72 && filters.momentumShort) {
     entry = "PREPARING";
   }
 
