@@ -470,3 +470,15 @@ function NumberField({
     </label>
   );
 }
+
+function LatencyTile({ label, value, good }: { label: string; value: string; good?: boolean | null }) {
+  const tone = good == null ? "text-foreground"
+    : good ? "text-[oklch(0.72_0.17_145)]"
+    : "text-[oklch(0.85_0.18_85)]";
+  return (
+    <div className="rounded border border-[var(--border)] bg-[var(--surface-2)]/40 p-2">
+      <div className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className={`font-mono text-sm font-bold ${tone}`}>{value}</div>
+    </div>
+  );
+}
