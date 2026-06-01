@@ -59,8 +59,15 @@ export function MatchIntelligence() {
   const [perf, setPerf] = useState<Perf>({
     trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0,
   });
-  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("IDLE");
+  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("ANALYZING");
   const [pausedReason, setPausedReason] = useState<string | null>(null);
+  const [lastTimings, setLastTimings] = useState<TradeTimings | null>(null);
+
+  // Subscribe to live latency emitted by buyMatch()
+  useEffect(() => {
+    const unsub = getAuthClient().onTradeTimings((t) => setLastTimings(t));
+    return () => { unsub(); };
+  }, []);
 
   // ─── Stable presented digit (hysteresis to prevent flicker) ───────────────
   const best = scan.best;
