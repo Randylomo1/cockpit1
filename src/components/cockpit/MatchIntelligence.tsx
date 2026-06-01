@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { scanMatches, HIGH_CONF_THRESHOLD, type SignalStrength } from "@/lib/engine/matchScanner";
 import { useAccount } from "@/lib/deriv/accountStore";
-import { getAuthClient } from "@/lib/deriv/authWs";
+import { getAuthClient, type TradeTimings } from "@/lib/deriv/authWs";
 import { toast } from "sonner";
 
 const STRENGTH_COLOR: Record<SignalStrength, string> = {
@@ -59,8 +59,15 @@ export function MatchIntelligence() {
   const [perf, setPerf] = useState<Perf>({
     trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0,
   });
-  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("IDLE");
+  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("ANALYZING");
   const [pausedReason, setPausedReason] = useState<string | null>(null);
+  const [lastTimings, setLastTimings] = useState<TradeTimings | null>(null);
+
+  // Subscribe to live latency emitted by buyMatch()
+  useEffect(() => {
+    const unsub = getAuthClient().onTradeTimings((t) => setLastTimings(t));
+    return () => { unsub(); };
+  }, []);
 
   // ─── Stable presented digit (hysteresis to prevent flicker) ───────────────
   const best = scan.best;
@@ -159,12 +166,13 @@ export function MatchIntelligence() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit]);
 
-  // Live status when idle
+  // Reset to ANALYZING after a settlement so the UI clearly returns to live scan.
   useEffect(() => {
-    if (inFlight.current) return;
-    if (tradeStatus === "PAUSED") return;
-    setTradeStatus(scan.highConfidence ? "ANALYZING" : "ANALYZING");
-  }, [scan.highConfidence, tradeStatus]);
+    if (tradeStatus === "SETTLED") {
+      const t = setTimeout(() => setTradeStatus("ANALYZING"), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [tradeStatus]);
 
   const onManualExecute = () => {
     if (!showDigit) { toast.error("No candidate yet"); return; }
@@ -218,7 +226,14 @@ export function MatchIntelligence() {
         </div>
       </div>
 
-      {/* Main display */}
+      {/* Live execution-latency strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+        <LatencyTile label="Proposal" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
+        <LatencyTile label="Buy" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
+        <LatencyTile label="Total Execution" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
+        <LatencyTile label="Last Trade" value={lastTimings ? `${Math.max(0, Math.round((Date.now() - lastTimings.at) / 1000))}s ago` : "no trades yet"} />
+      </div>
+
       <div className="grid grid-cols-[auto_1fr] gap-6 items-center">
         <div className="text-center">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
@@ -453,5 +468,17 @@ function NumberField({
         className="bg-[var(--surface-2)] border border-[var(--border)] rounded px-2 py-1 text-foreground focus:outline-none focus:border-[var(--gold)]"
       />
     </label>
+  );
+}
+
+function LatencyTile({ label, value, good }: { label: string; value: string; good?: boolean | null }) {
+  const tone = good == null ? "text-foreground"
+    : good ? "text-[oklch(0.72_0.17_145)]"
+    : "text-[oklch(0.85_0.18_85)]";
+  return (
+    <div className="rounded border border-[var(--border)] bg-[var(--surface-2)]/40 p-2">
+      <div className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className={`font-mono text-sm font-bold ${tone}`}>{value}</div>
+    </div>
   );
 }

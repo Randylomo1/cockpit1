@@ -28,6 +28,22 @@ export interface AuthBalance {
   currency: string;
 }
 
+export interface TradeTimings {
+  proposalMs: number;
+  buyMs: number;
+  totalMs: number;
+  at: number;
+}
+
+export interface SavedAccount {
+  label: string;
+  token: string;
+  loginid?: string;
+  isVirtual?: boolean;
+  currency?: string;
+  savedAt: number;
+}
+
 type Listener<T> = (v: T) => void;
 
 interface PendingRequest {
@@ -68,9 +84,22 @@ export class DerivAuthClient {
   getBalance() { return this.balance; }
   getLatency() { return this.lastLatencyMs; }
 
+  /** Last trade latency breakdown (ms). */
+  private lastTradeTimings: TradeTimings | null = null;
+  private tradeTimingsListeners = new Set<Listener<TradeTimings | null>>();
+  getLastTradeTimings() { return this.lastTradeTimings; }
+  onTradeTimings(l: Listener<TradeTimings | null>) {
+    this.tradeTimingsListeners.add(l); l(this.lastTradeTimings);
+    return () => this.tradeTimingsListeners.delete(l);
+  }
+  private emitTimings(t: TradeTimings) {
+    this.lastTradeTimings = t;
+    this.tradeTimingsListeners.forEach((l) => { try { l(t); } catch {} });
+  }
+
   /**
    * Buy a DIGITMATCH contract directly via proposal → buy.
-   * Returns Deriv's buy response (contract_id, buy_price, payout, …).
+   * Returns Deriv's buy response and a timing breakdown.
    */
   async buyMatch(args: {
     symbol: string;
@@ -78,13 +107,14 @@ export class DerivAuthClient {
     stake: number;
     durationTicks?: number;
     currency?: string;
-  }): Promise<{ contract_id: number; buy_price: number; payout: number; longcode: string; transaction_id: number }> {
+  }): Promise<{ contract_id: number; buy_price: number; payout: number; longcode: string; transaction_id: number; timings: TradeTimings }> {
     if (this.status !== "CONNECTED") throw new Error("Account not connected");
     const currency = args.currency ?? this.account?.currency ?? "USD";
     const duration = args.durationTicks ?? 1;
     const stake = Math.max(0.35, Number(args.stake.toFixed(2)));
     const digit = Math.max(0, Math.min(9, Math.round(args.digit)));
 
+    const t0 = performance.now();
     const propRes: any = await this.send({
       proposal: 1,
       amount: stake,
@@ -96,19 +126,31 @@ export class DerivAuthClient {
       symbol: args.symbol,
       barrier: String(digit),
     });
+    const t1 = performance.now();
     if (propRes?.error) throw new Error(propRes.error.message ?? "proposal failed");
     const proposal = propRes.proposal;
     if (!proposal?.id) throw new Error("No proposal id returned");
 
     const buyRes: any = await this.send({ buy: proposal.id, price: stake });
+    const t2 = performance.now();
     if (buyRes?.error) throw new Error(buyRes.error.message ?? "buy failed");
     const b = buyRes.buy;
+    const timings: TradeTimings = {
+      proposalMs: Math.round(t1 - t0),
+      buyMs: Math.round(t2 - t1),
+      totalMs: Math.round(t2 - t0),
+      at: Date.now(),
+    };
+    this.emitTimings(timings);
+    // eslint-disable-next-line no-console
+    console.info(`[trade] digit=${digit} proposal=${timings.proposalMs}ms buy=${timings.buyMs}ms total=${timings.totalMs}ms`);
     return {
       contract_id: b.contract_id,
       buy_price: Number(b.buy_price),
       payout: Number(b.payout),
       longcode: b.longcode,
       transaction_id: b.transaction_id,
+      timings,
     };
   }
 
@@ -392,4 +434,32 @@ export function clearToken() {
     localStorage.removeItem(REMEMBER_KEY);
     sessionStorage.removeItem(TOKEN_KEY);
   } catch {}
+}
+
+// ─── saved accounts (multi-token: e.g. Demo + Real) ───
+const SAVED_KEY = "dvx.auth.saved.v1";
+export function loadSavedAccounts(): SavedAccount[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(xorDeobfuscate(raw));
+    return Array.isArray(arr) ? arr.filter((a) => a && a.token && a.label) : [];
+  } catch { return []; }
+}
+export function persistSavedAccounts(list: SavedAccount[]) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(SAVED_KEY, xorObfuscate(JSON.stringify(list))); } catch {}
+}
+export function upsertSavedAccount(acc: SavedAccount): SavedAccount[] {
+  const list = loadSavedAccounts().filter((a) => a.token !== acc.token && a.label.toLowerCase() !== acc.label.toLowerCase());
+  list.unshift(acc);
+  const trimmed = list.slice(0, 4);
+  persistSavedAccounts(trimmed);
+  return trimmed;
+}
+export function removeSavedAccount(token: string): SavedAccount[] {
+  const list = loadSavedAccounts().filter((a) => a.token !== token);
+  persistSavedAccounts(list);
+  return list;
 }
