@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { scanMatches, HIGH_CONF_THRESHOLD, type SignalStrength } from "@/lib/engine/matchScanner";
 import { useAccount } from "@/lib/deriv/accountStore";
-import { getAuthClient } from "@/lib/deriv/authWs";
+import { getAuthClient, type TradeTimings } from "@/lib/deriv/authWs";
 import { toast } from "sonner";
 
 const STRENGTH_COLOR: Record<SignalStrength, string> = {
