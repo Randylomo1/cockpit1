@@ -226,7 +226,14 @@ export function MatchIntelligence() {
         </div>
       </div>
 
-      {/* Main display */}
+      {/* Live execution-latency strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+        <LatencyTile label="Proposal" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
+        <LatencyTile label="Buy" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
+        <LatencyTile label="Total Execution" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
+        <LatencyTile label="Last Trade" value={lastTimings ? `${Math.max(0, Math.round((Date.now() - lastTimings.at) / 1000))}s ago` : "no trades yet"} />
+      </div>
+
       <div className="grid grid-cols-[auto_1fr] gap-6 items-center">
         <div className="text-center">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
