@@ -28,6 +28,22 @@ export interface AuthBalance {
   currency: string;
 }
 
+export interface TradeTimings {
+  proposalMs: number;
+  buyMs: number;
+  totalMs: number;
+  at: number;
+}
+
+export interface SavedAccount {
+  label: string;
+  token: string;
+  loginid?: string;
+  isVirtual?: boolean;
+  currency?: string;
+  savedAt: number;
+}
+
 type Listener<T> = (v: T) => void;
 
 interface PendingRequest {
