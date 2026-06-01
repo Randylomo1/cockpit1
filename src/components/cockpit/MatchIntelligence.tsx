@@ -166,12 +166,13 @@ export function MatchIntelligence() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit]);
 
-  // Live status when idle
+  // Reset to ANALYZING after a settlement so the UI clearly returns to live scan.
   useEffect(() => {
-    if (inFlight.current) return;
-    if (tradeStatus === "PAUSED") return;
-    setTradeStatus(scan.highConfidence ? "ANALYZING" : "ANALYZING");
-  }, [scan.highConfidence, tradeStatus]);
+    if (tradeStatus === "SETTLED") {
+      const t = setTimeout(() => setTradeStatus("ANALYZING"), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [tradeStatus]);
 
   const onManualExecute = () => {
     if (!showDigit) { toast.error("No candidate yet"); return; }
