@@ -435,3 +435,31 @@ export function clearToken() {
     sessionStorage.removeItem(TOKEN_KEY);
   } catch {}
 }
+
+// ─── saved accounts (multi-token: e.g. Demo + Real) ───
+const SAVED_KEY = "dvx.auth.saved.v1";
+export function loadSavedAccounts(): SavedAccount[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(xorDeobfuscate(raw));
+    return Array.isArray(arr) ? arr.filter((a) => a && a.token && a.label) : [];
+  } catch { return []; }
+}
+export function persistSavedAccounts(list: SavedAccount[]) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(SAVED_KEY, xorObfuscate(JSON.stringify(list))); } catch {}
+}
+export function upsertSavedAccount(acc: SavedAccount): SavedAccount[] {
+  const list = loadSavedAccounts().filter((a) => a.token !== acc.token && a.label.toLowerCase() !== acc.label.toLowerCase());
+  list.unshift(acc);
+  const trimmed = list.slice(0, 4);
+  persistSavedAccounts(trimmed);
+  return trimmed;
+}
+export function removeSavedAccount(token: string): SavedAccount[] {
+  const list = loadSavedAccounts().filter((a) => a.token !== token);
+  persistSavedAccounts(list);
+  return list;
+}
