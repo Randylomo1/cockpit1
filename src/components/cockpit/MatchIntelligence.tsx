@@ -181,6 +181,7 @@ export function MatchIntelligence() {
   useEffect(() => {
     if (!autoTrade) return;
     if (!accountConnected) return;
+    if (isReal && !realConfirmed) return;
     if (inFlight.current) return;
     if (!scan.highConfidence || !showDigit) return;
 
@@ -191,9 +192,9 @@ export function MatchIntelligence() {
     if (since < minIntervalSec) return;
 
     setPausedReason(null);
-    void executeTrade(showDigit.digit);
+    void executeTrade(showDigit.digit, showDigit.score);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit]);
+  }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit, isReal, realConfirmed]);
 
   // Reset to ANALYZING after a settlement so the UI clearly returns to live scan.
   useEffect(() => {
@@ -205,7 +206,7 @@ export function MatchIntelligence() {
 
   const onManualExecute = () => {
     if (!showDigit) { toast.error("No candidate yet"); return; }
-    void executeTrade(showDigit.digit);
+    void executeTrade(showDigit.digit, showDigit.score);
   };
 
   const resetSession = () => {
