@@ -1,67 +1,68 @@
 /**
- * Account state — isolated from market cockpit store.
- * Subscribes to the singleton DerivAuthClient and exposes a Zustand slice.
+ * Account state — Zustand slice over the auth pool.
+ *
+ * Tokens are session-only (sessionStorage). No localStorage persistence.
+ * Multiple accounts (Demo + Real) can be connected simultaneously; one is
+ * marked active for trade execution.
  */
 import { create } from "zustand";
-import {
-  getAuthClient,
-  saveToken,
-  loadToken,
-  clearToken,
-  type AuthStatus,
-  type AuthAccount,
-  type AuthBalance,
-} from "./authWs";
+import { getAuthPool, type PoolEntry } from "./authPool";
+import { purgeLegacyTokenStorage, type AuthStatus, type AuthAccount, type AuthBalance } from "./authWs";
 
 interface AccountState {
+  // active account mirrors
   status: AuthStatus;
   error?: string;
   account: AuthAccount | null;
   balance: AuthBalance | null;
-  remember: boolean;
+  // pool
+  entries: PoolEntry[];
+  activeToken: string | null;
   initialised: boolean;
-  redactedToken: string | null;
-  connect: (token: string, remember: boolean) => Promise<void>;
-  disconnect: () => void;
+
   bootstrap: () => void;
-  setRemember: (v: boolean) => void;
+  connect: (token: string, label: string) => Promise<void>;
+  setActive: (token: string) => void;
+  remove: (token: string) => void;
+  disconnect: () => void;
 }
 
 export const useAccount = create<AccountState>((set, get) => ({
   status: "DISCONNECTED",
   account: null,
   balance: null,
-  remember: false,
+  entries: [],
+  activeToken: null,
   initialised: false,
-  redactedToken: null,
 
   bootstrap: () => {
     if (get().initialised) return;
     set({ initialised: true });
-    const c = getAuthClient();
-    c.onStatus(({ status, error }) =>
-      set({ status, error, redactedToken: c.getRedactedToken() }),
-    );
-    c.onAccount((a) => set({ account: a }));
-    c.onBalance((b) => set({ balance: b }));
-
-    const persisted = loadToken();
-    if (persisted) {
-      set({ remember: !!localStorage.getItem("dvx.auth.remember.v1") });
-      c.connect(persisted).catch(() => {});
-    }
+    purgeLegacyTokenStorage();
+    const pool = getAuthPool();
+    pool.on((entries, activeToken) => {
+      const active = activeToken ? entries.find((e) => e.token === activeToken) ?? null : null;
+      set({
+        entries,
+        activeToken,
+        status: active?.status ?? "DISCONNECTED",
+        error: active?.error,
+        account: active?.account ?? null,
+        balance: active?.balance ?? null,
+      });
+    });
+    pool.bootstrap();
   },
 
-  connect: async (token, remember) => {
-    saveToken(token, remember);
-    set({ remember });
-    await getAuthClient().connect(token);
+  connect: async (token, label) => {
+    await getAuthPool().add(token, label);
   },
+
+  setActive: (token) => getAuthPool().setActive(token),
+  remove: (token) => getAuthPool().remove(token),
 
   disconnect: () => {
-    clearToken();
-    getAuthClient().disconnect();
+    const active = getAuthPool().getActiveToken();
+    if (active) getAuthPool().remove(active);
   },
-
-  setRemember: (v) => set({ remember: v }),
 }));

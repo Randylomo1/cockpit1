@@ -1,7 +1,17 @@
 /**
- * Authorized Deriv WebSocket — isolated from the public market WS.
- * Handles: authorize, balance stream, ping, reconnect, subscription restore.
- * Future-ready for proposal / buy / portfolio / transaction streams.
+ * Authorized Deriv WebSocket client.
+ *
+ * SECURITY NOTE
+ * -------------
+ * Previous versions XOR-obfuscated tokens in localStorage. That was
+ * security theatre — anything with JS access (XSS, extensions, devtools)
+ * could recover the token. This module now uses **sessionStorage only**
+ * with plain JSON: tokens live in memory for the tab session, are gone
+ * when the tab closes, and are never persisted to disk via localStorage.
+ *
+ * Multiple concurrent authorized sockets are supported via the auth pool
+ * (see ./authPool.ts) — e.g. Demo + Real connected simultaneously, with
+ * one selected as the trading-active account.
  */
 import { DERIV_WS_URL } from "./markets";
 
@@ -29,10 +39,13 @@ export interface AuthBalance {
 }
 
 export interface TradeTimings {
+  tickReceivedAt?: number;   // ms epoch when triggering tick arrived
+  signalAt?: number;         // ms epoch when signal was selected
   proposalMs: number;
   buyMs: number;
-  totalMs: number;
-  at: number;
+  totalMs: number;           // proposal+buy round-trip
+  signalToOrderMs?: number;  // signalAt → buy confirmed
+  at: number;                // ms epoch when buy confirmed
 }
 
 export interface SavedAccount {
@@ -69,25 +82,26 @@ export class DerivAuthClient {
   private account: AuthAccount | null = null;
   private balance: AuthBalance | null = null;
   private balanceSubId: string | null = null;
+  private lastApiResponseAt: number | null = null;
 
-  // listeners
   private statusListeners = new Set<Listener<{ status: AuthStatus; error?: string }>>();
   private accountListeners = new Set<Listener<AuthAccount | null>>();
   private balanceListeners = new Set<Listener<AuthBalance | null>>();
   private contractListeners = new Map<number, (msg: any) => void>();
+  private lastTradeTimings: TradeTimings | null = null;
+  private tradeTimingsListeners = new Set<Listener<TradeTimings | null>>();
 
   // ──────── public api ────────
-
   getStatus() { return this.status; }
   getStatusError() { return this.statusErr; }
   getAccount() { return this.account; }
   getBalance() { return this.balance; }
   getLatency() { return this.lastLatencyMs; }
-
-  /** Last trade latency breakdown (ms). */
-  private lastTradeTimings: TradeTimings | null = null;
-  private tradeTimingsListeners = new Set<Listener<TradeTimings | null>>();
+  getLastApiResponseAt() { return this.lastApiResponseAt; }
+  getRedactedToken() { return this.token ? REDACT(this.token) : null; }
+  getToken() { return this.token; }
   getLastTradeTimings() { return this.lastTradeTimings; }
+
   onTradeTimings(l: Listener<TradeTimings | null>) {
     this.tradeTimingsListeners.add(l); l(this.lastTradeTimings);
     return () => this.tradeTimingsListeners.delete(l);
@@ -97,9 +111,22 @@ export class DerivAuthClient {
     this.tradeTimingsListeners.forEach((l) => { try { l(t); } catch {} });
   }
 
+  onStatus(l: Listener<{ status: AuthStatus; error?: string }>) {
+    this.statusListeners.add(l); l({ status: this.status, error: this.statusErr });
+    return () => this.statusListeners.delete(l);
+  }
+  onAccount(l: Listener<AuthAccount | null>) {
+    this.accountListeners.add(l); l(this.account);
+    return () => this.accountListeners.delete(l);
+  }
+  onBalance(l: Listener<AuthBalance | null>) {
+    this.balanceListeners.add(l); l(this.balance);
+    return () => this.balanceListeners.delete(l);
+  }
+
   /**
-   * Buy a DIGITMATCH contract directly via proposal → buy.
-   * Returns Deriv's buy response and a timing breakdown.
+   * Buy a DIGITMATCH contract directly via proposal → buy. Accepts optional
+   * pipeline timestamps so we can measure tick→signal→order latency end-to-end.
    */
   async buyMatch(args: {
     symbol: string;
@@ -107,6 +134,8 @@ export class DerivAuthClient {
     stake: number;
     durationTicks?: number;
     currency?: string;
+    tickReceivedAt?: number;
+    signalAt?: number;
   }): Promise<{ contract_id: number; buy_price: number; payout: number; longcode: string; transaction_id: number; timings: TradeTimings }> {
     if (this.status !== "CONNECTED") throw new Error("Account not connected");
     const currency = args.currency ?? this.account?.currency ?? "USD";
@@ -116,15 +145,10 @@ export class DerivAuthClient {
 
     const t0 = performance.now();
     const propRes: any = await this.send({
-      proposal: 1,
-      amount: stake,
-      basis: "stake",
-      contract_type: "DIGITMATCH",
-      currency,
-      duration,
-      duration_unit: "t",
-      symbol: args.symbol,
-      barrier: String(digit),
+      proposal: 1, amount: stake, basis: "stake",
+      contract_type: "DIGITMATCH", currency,
+      duration, duration_unit: "t",
+      symbol: args.symbol, barrier: String(digit),
     });
     const t1 = performance.now();
     if (propRes?.error) throw new Error(propRes.error.message ?? "proposal failed");
@@ -135,15 +159,22 @@ export class DerivAuthClient {
     const t2 = performance.now();
     if (buyRes?.error) throw new Error(buyRes.error.message ?? "buy failed");
     const b = buyRes.buy;
+    const now = Date.now();
     const timings: TradeTimings = {
+      tickReceivedAt: args.tickReceivedAt,
+      signalAt: args.signalAt,
       proposalMs: Math.round(t1 - t0),
       buyMs: Math.round(t2 - t1),
       totalMs: Math.round(t2 - t0),
-      at: Date.now(),
+      signalToOrderMs: args.signalAt ? Math.round(now - args.signalAt) : undefined,
+      at: now,
     };
     this.emitTimings(timings);
     // eslint-disable-next-line no-console
-    console.info(`[trade] digit=${digit} proposal=${timings.proposalMs}ms buy=${timings.buyMs}ms total=${timings.totalMs}ms`);
+    console.info(
+      `[trade] digit=${digit} prop=${timings.proposalMs}ms buy=${timings.buyMs}ms total=${timings.totalMs}ms` +
+      (timings.signalToOrderMs != null ? ` s→o=${timings.signalToOrderMs}ms` : ""),
+    );
     return {
       contract_id: b.contract_id,
       buy_price: Number(b.buy_price),
@@ -154,10 +185,6 @@ export class DerivAuthClient {
     };
   }
 
-  /**
-   * Subscribe to a contract until it is sold/settled. Resolves with the
-   * final profit (positive = win, negative = loss).
-   */
   awaitSettlement(contract_id: number, timeoutMs = 60_000): Promise<{ profit: number; status: string }> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -195,22 +222,6 @@ export class DerivAuthClient {
     });
   }
 
-  getRedactedToken() { return this.token ? REDACT(this.token) : null; }
-
-  onStatus(l: Listener<{ status: AuthStatus; error?: string }>) {
-    this.statusListeners.add(l);
-    l({ status: this.status, error: this.statusErr });
-    return () => this.statusListeners.delete(l);
-  }
-  onAccount(l: Listener<AuthAccount | null>) {
-    this.accountListeners.add(l); l(this.account);
-    return () => this.accountListeners.delete(l);
-  }
-  onBalance(l: Listener<AuthBalance | null>) {
-    this.balanceListeners.add(l); l(this.balance);
-    return () => this.balanceListeners.delete(l);
-  }
-
   async connect(token: string) {
     if (typeof window === "undefined") return;
     if (!token || token.trim().length < 8) {
@@ -240,7 +251,6 @@ export class DerivAuthClient {
   }
 
   // ──────── internals ────────
-
   private async openSocket() {
     this.setStatus(this.reconnectAttempts > 0 ? "RECONNECTING" : "CONNECTING");
     try {
@@ -301,9 +311,7 @@ export class DerivAuthClient {
         this.balanceListeners.forEach((l) => l(this.balance));
       }
       if (res?.subscription?.id) this.balanceSubId = res.subscription.id;
-    } catch {
-      // tolerated
-    }
+    } catch { /* tolerated */ }
   }
 
   send<T = any>(payload: Record<string, any>): Promise<T> {
@@ -322,6 +330,7 @@ export class DerivAuthClient {
   private handleMessage(raw: string) {
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return; }
+    this.lastApiResponseAt = Date.now();
 
     if (msg.req_id && this.pending.has(msg.req_id)) {
       const p = this.pending.get(msg.req_id)!;
@@ -378,81 +387,45 @@ export class DerivAuthClient {
   }
 }
 
-let _client: DerivAuthClient | null = null;
-export function getAuthClient(): DerivAuthClient {
-  if (typeof window === "undefined") return new DerivAuthClient();
-  if (!_client) _client = new DerivAuthClient();
-  return _client;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Session-only token storage. No localStorage, no obfuscation.
+// Tokens live for the lifetime of the tab. Closing the tab clears them.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─── token persistence (light obfuscation; not true encryption) ───
-const TOKEN_KEY = "dvx.auth.token.v1";
-const REMEMBER_KEY = "dvx.auth.remember.v1";
+const SAVED_KEY = "dvx.auth.saved.v2";        // sessionStorage only
+const ACTIVE_KEY = "dvx.auth.active.v2";      // sessionStorage only
+const LEGACY_KEYS = [
+  "dvx.auth.token.v1", "dvx.auth.remember.v1", "dvx.auth.saved.v1",
+];
 
-function xorObfuscate(s: string): string {
-  const k = "matchcockpit-noir-gold";
-  let out = "";
-  for (let i = 0; i < s.length; i++) {
-    out += String.fromCharCode(s.charCodeAt(i) ^ k.charCodeAt(i % k.length));
-  }
-  return typeof btoa !== "undefined" ? btoa(out) : out;
-}
-function xorDeobfuscate(s: string): string {
-  const raw = typeof atob !== "undefined" ? atob(s) : s;
-  const k = "matchcockpit-noir-gold";
-  let out = "";
-  for (let i = 0; i < raw.length; i++) {
-    out += String.fromCharCode(raw.charCodeAt(i) ^ k.charCodeAt(i % k.length));
-  }
-  return out;
-}
-
-export function saveToken(token: string, remember: boolean) {
+/** Wipe legacy XOR-obfuscated localStorage entries from previous versions. */
+export function purgeLegacyTokenStorage() {
   if (typeof window === "undefined") return;
   try {
-    if (remember) {
-      localStorage.setItem(TOKEN_KEY, xorObfuscate(token));
-      localStorage.setItem(REMEMBER_KEY, "1");
-    } else {
-      sessionStorage.setItem(TOKEN_KEY, xorObfuscate(token));
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(REMEMBER_KEY);
+    for (const k of LEGACY_KEYS) {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
     }
   } catch {}
 }
-export function loadToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
-    return raw ? xorDeobfuscate(raw) : null;
-  } catch { return null; }
-}
-export function clearToken() {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REMEMBER_KEY);
-    sessionStorage.removeItem(TOKEN_KEY);
-  } catch {}
-}
 
-// ─── saved accounts (multi-token: e.g. Demo + Real) ───
-const SAVED_KEY = "dvx.auth.saved.v1";
 export function loadSavedAccounts(): SavedAccount[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(SAVED_KEY);
+    const raw = sessionStorage.getItem(SAVED_KEY);
     if (!raw) return [];
-    const arr = JSON.parse(xorDeobfuscate(raw));
+    const arr = JSON.parse(raw);
     return Array.isArray(arr) ? arr.filter((a) => a && a.token && a.label) : [];
   } catch { return []; }
 }
 export function persistSavedAccounts(list: SavedAccount[]) {
   if (typeof window === "undefined") return;
-  try { localStorage.setItem(SAVED_KEY, xorObfuscate(JSON.stringify(list))); } catch {}
+  try { sessionStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch {}
 }
 export function upsertSavedAccount(acc: SavedAccount): SavedAccount[] {
-  const list = loadSavedAccounts().filter((a) => a.token !== acc.token && a.label.toLowerCase() !== acc.label.toLowerCase());
+  const list = loadSavedAccounts().filter(
+    (a) => a.token !== acc.token && a.label.toLowerCase() !== acc.label.toLowerCase(),
+  );
   list.unshift(acc);
   const trimmed = list.slice(0, 4);
   persistSavedAccounts(trimmed);
@@ -462,4 +435,23 @@ export function removeSavedAccount(token: string): SavedAccount[] {
   const list = loadSavedAccounts().filter((a) => a.token !== token);
   persistSavedAccounts(list);
   return list;
+}
+export function loadActiveToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return sessionStorage.getItem(ACTIVE_KEY); } catch { return null; }
+}
+export function persistActiveToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (token) sessionStorage.setItem(ACTIVE_KEY, token);
+    else sessionStorage.removeItem(ACTIVE_KEY);
+  } catch {}
+}
+
+// ─── Backward-compatible single-client accessor ──────────────────────────────
+// Returns the *active* client from the auth pool so existing call sites
+// (executeTrade, etc.) keep working.
+import { getAuthPool } from "./authPool";
+export function getAuthClient(): DerivAuthClient {
+  return getAuthPool().getActiveClient();
 }
