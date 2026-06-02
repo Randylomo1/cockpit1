@@ -15,6 +15,7 @@ import { useCockpit } from "@/lib/engine/store";
 import { scanMatches, HIGH_CONF_THRESHOLD, type SignalStrength } from "@/lib/engine/matchScanner";
 import { useAccount } from "@/lib/deriv/accountStore";
 import { getAuthClient, type TradeTimings } from "@/lib/deriv/authWs";
+import { insertTrade, updateTradeOutcome } from "@/lib/db/tradeDb";
 import { toast } from "sonner";
 
 const STRENGTH_COLOR: Record<SignalStrength, string> = {
@@ -50,10 +51,15 @@ export function MatchIntelligence() {
 
   // ─── Account ──────────────────────────────────────────────────────────────
   const accountStatus = useAccount((s) => s.status);
+  const account = useAccount((s) => s.account);
   const bootstrap = useAccount((s) => s.bootstrap);
   const balance = useAccount((s) => s.balance);
   useEffect(() => { bootstrap(); }, [bootstrap]);
   const accountConnected = accountStatus === "CONNECTED";
+  const isReal = account?.is_virtual === false;
+  const [realConfirmed, setRealConfirmed] = useState(false);
+  // Reset confirmation if we switch off the real account
+  useEffect(() => { if (!isReal) setRealConfirmed(false); }, [isReal]);
 
   // ─── Performance ──────────────────────────────────────────────────────────
   const [perf, setPerf] = useState<Perf>({
@@ -102,26 +108,46 @@ export function MatchIntelligence() {
   const inFlight = useRef(false);
   const lastTradeAt = useRef<number>(0);
 
-  const executeTrade = async (digit: number) => {
+  const executeTrade = async (digit: number, signalScore?: number) => {
     if (inFlight.current) return;
     if (!accountConnected) { toast.error("Connect your Deriv account first"); return; }
+    if (isReal && !realConfirmed) {
+      toast.error("Confirm REAL trading first", { description: "Tick 'I understand' below to enable live execution on this real account." });
+      return;
+    }
     const risk = checkRiskGate();
     if (risk) { setTradeStatus("PAUSED"); setPausedReason(risk); toast.error(risk); return; }
 
     inFlight.current = true;
     setTradeStatus("EXECUTING");
     lastTradeAt.current = Date.now();
-    const tid = toast.loading(`MATCH ${digit} · ${activeMarket} · $${stake}`);
+    const signalAt = Date.now();
+    const tickReceivedAt = tick?.epoch ? tick.epoch * 1000 : signalAt;
+    const mode: "DEMO" | "REAL" = account?.is_virtual ? "DEMO" : "REAL";
+    const tid = toast.loading(`${mode} · MATCH ${digit} · ${activeMarket} · $${stake}`);
+    let dbId: number | null = null;
     try {
       const res = await getAuthClient().buyMatch({
         symbol: activeMarket, digit, stake, durationTicks: 1,
+        tickReceivedAt, signalAt,
       });
       toast.success(`Trade placed · #${res.contract_id}`, {
         id: tid,
-        description: `Stake $${res.buy_price.toFixed(2)} · Payout $${res.payout.toFixed(2)}`,
+        description: `Stake $${res.buy_price.toFixed(2)} · Payout $${res.payout.toFixed(2)} · ${res.timings.totalMs}ms`,
       });
       setTradeStatus("OPEN");
-      // Await settlement → update perf
+      try {
+        dbId = await insertTrade({
+          ts: res.timings.at, mode, loginid: account?.loginid,
+          symbol: activeMarket, digit,
+          stake: res.buy_price, payout: res.payout, contractId: res.contract_id,
+          signalScore, signalStrength: scan.strength, dominanceGap: scan.dominanceGap,
+          tickReceivedAt, signalAt,
+          proposalMs: res.timings.proposalMs, buyMs: res.timings.buyMs,
+          totalMs: res.timings.totalMs, signalToOrderMs: res.timings.signalToOrderMs,
+          outcome: "OPEN",
+        });
+      } catch (e) { console.warn("trade-db insert failed", e); }
       try {
         const settled = await getAuthClient().awaitSettlement(res.contract_id);
         const win = settled.profit > 0;
@@ -132,15 +158,18 @@ export function MatchIntelligence() {
           netPnL: p.netPnL + settled.profit,
           consecLosses: win ? 0 : p.consecLosses + 1,
         }));
+        if (dbId != null) updateTradeOutcome(dbId, { outcome: win ? "WIN" : "LOSS", profit: settled.profit }).catch(() => {});
         setTradeStatus("SETTLED");
         toast[win ? "success" : "error"](
           `${win ? "WIN" : "LOSS"} · ${settled.profit >= 0 ? "+" : ""}$${settled.profit.toFixed(2)}`
         );
       } catch (e: any) {
+        if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
         toast.error("Settlement tracking lost", { description: String(e?.message ?? e) });
         setTradeStatus("IDLE");
       }
     } catch (e: any) {
+      if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
       toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
       setTradeStatus("IDLE");
     } finally {
