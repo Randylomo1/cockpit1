@@ -9,6 +9,8 @@ import { MarketStatsStrip } from "./MarketStatsStrip";
 import { LiveDbotSignal } from "./LiveDbotSignal";
 import { MatchButtonGrid } from "./MatchButtonGrid";
 import { MatchIntelligence } from "./MatchIntelligence";
+import { AccountDiagnostics } from "./AccountDiagnostics";
+import { Backtester } from "./Backtester";
 
 export function Cockpit() {
   const connect = useCockpit((s) => s.connect);
@@ -26,6 +28,10 @@ export function Cockpit() {
         {/* PRIMARY: real-time matches intelligence — single trade digit, high-confidence filter */}
         <div className="lg:col-span-3">
           <MatchIntelligence />
+        </div>
+        <div className="lg:col-span-3 grid gap-4 md:grid-cols-2">
+          <AccountDiagnostics />
+          <Backtester />
         </div>
         <div className="lg:col-span-3">
           <LiveDbotSignal />

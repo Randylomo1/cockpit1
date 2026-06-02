@@ -16,6 +16,7 @@ import { scanMatches, HIGH_CONF_THRESHOLD, type SignalStrength } from "@/lib/eng
 import { useAccount } from "@/lib/deriv/accountStore";
 import { getAuthClient, type TradeTimings } from "@/lib/deriv/authWs";
 import { insertTrade, updateTradeOutcome } from "@/lib/db/tradeDb";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const STRENGTH_COLOR: Record<SignalStrength, string> = {
