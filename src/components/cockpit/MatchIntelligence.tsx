@@ -429,6 +429,29 @@ export function MatchIntelligence() {
         </div>
       </div>
 
+      {isReal && (
+        <div className="mt-4 pt-4 border-t border-[var(--destructive)]/40 rounded-md bg-[var(--destructive)]/5 border border-[var(--destructive)]/40 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="size-4 mt-0.5 text-[var(--destructive)] shrink-0" />
+            <div className="flex-1 text-xs">
+              <div className="font-bold uppercase tracking-widest text-[var(--destructive)]">LIVE REAL ACCOUNT</div>
+              <div className="text-muted-foreground mt-0.5">
+                Trades on {account?.loginid} will use real funds. Switch to a DEMO account in the header for safe testing.
+              </div>
+              <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={realConfirmed}
+                  onChange={(e) => setRealConfirmed(e.target.checked)}
+                  className="accent-[var(--destructive)] w-4 h-4"
+                />
+                <span className="font-mono text-[11px]">I understand — enable LIVE execution</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Execution */}
       <div className="mt-4 pt-4 border-t border-[var(--border)] flex flex-wrap items-center gap-3">
         <span className="text-[10px] font-mono text-muted-foreground">
