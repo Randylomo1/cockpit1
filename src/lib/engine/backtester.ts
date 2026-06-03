@@ -38,6 +38,7 @@ export interface BacktestResult {
   netPnL: number;
   roi: number;
   maxDrawdown: number;
+  profitFactor: number;     // gross win / gross loss
   ticksAnalysed: number;
   signalRate: number;       // trades per 1000 ticks
 }
@@ -81,6 +82,8 @@ export function runBacktest(p: BacktestParams): BacktestResult {
 
   const wins = trades.filter((t) => t.outcome === "WIN").length;
   const losses = trades.length - wins;
+  const grossWin = trades.filter((t) => t.outcome === "WIN").reduce((s, t) => s + t.profit, 0);
+  const grossLoss = Math.abs(trades.filter((t) => t.outcome === "LOSS").reduce((s, t) => s + t.profit, 0));
   return {
     trades,
     wins,
@@ -89,6 +92,7 @@ export function runBacktest(p: BacktestParams): BacktestResult {
     netPnL: net,
     roi: totalRisked ? (net / totalRisked) * 100 : 0,
     maxDrawdown: maxDd,
+    profitFactor: grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0),
     ticksAnalysed: p.digits.length,
     signalRate: p.digits.length ? (trades.length / p.digits.length) * 1000 : 0,
   };

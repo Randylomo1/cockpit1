@@ -1,41 +1,63 @@
 /**
- * Backtester panel — replays the current live digit buffer through the
- * matches scanner with chosen risk params. Pure local computation; runs
- * instantly and never touches the API.
+ * Backtester panel — replays digit history through the matches scanner with
+ * chosen risk params. Source can be:
+ *  - LIVE: current in-memory buffer for the active market.
+ *  - STORED: persisted tick history from IndexedDB (per market, up to 20k).
+ *
+ * Pure local computation; runs instantly and never touches the API.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCockpit } from "@/lib/engine/store";
 import { runBacktest, type BacktestResult } from "@/lib/engine/backtester";
 import { HIGH_CONF_THRESHOLD } from "@/lib/engine/matchScanner";
+import { loadTickDigits, tickCounts, clearTicks } from "@/lib/db/tickDb";
+import { SCAN_MARKETS } from "@/lib/engine/multiScanner";
+import type { MarketSymbol } from "@/lib/deriv/markets";
+
+type Source = "LIVE" | "STORED";
 
 export function Backtester() {
   const { activeMarket, digits } = useCockpit();
-  const buffer = digits[activeMarket] ?? [];
+  const liveBuffer = digits[activeMarket] ?? [];
 
+  const [source, setSource] = useState<Source>("LIVE");
+  const [market, setMarket] = useState<MarketSymbol>(activeMarket);
   const [stake, setStake] = useState(1);
   const [threshold, setThreshold] = useState(HIGH_CONF_THRESHOLD);
   const [minInterval, setMinInterval] = useState(2);
   const [maxLossStreak, setMaxLossStreak] = useState(4);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [running, setRunning] = useState(false);
+  const [stored, setStored] = useState<Record<string, number>>({});
 
-  const sample = buffer.length;
+  useEffect(() => {
+    let alive = true;
+    const tick = () => tickCounts().then((c) => { if (alive) setStored(c); }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
-  const run = () => {
+  const sample = source === "LIVE" ? liveBuffer.length : (stored[market] ?? 0);
+
+  const run = async () => {
     if (sample < 50) { setResult(null); return; }
     setRunning(true);
-    // microtask – computation is fast but yield so the UI repaints
-    queueMicrotask(() => {
+    try {
+      const series = source === "LIVE"
+        ? liveBuffer
+        : await loadTickDigits(market, 20_000);
       const r = runBacktest({
-        digits: buffer,
+        digits: series,
         stake,
         threshold,
         minIntervalTicks: minInterval,
         maxConsecLosses: maxLossStreak,
       });
       setResult(r);
+    } finally {
       setRunning(false);
-    });
+    }
   };
 
   const pnlTone = useMemo(() => {
@@ -44,20 +66,49 @@ export function Backtester() {
       : result.netPnL < 0 ? "text-[oklch(0.62_0.22_25)]" : "text-foreground";
   }, [result]);
 
+  const totalStored = Object.values(stored).reduce((s, n) => s + n, 0);
+
   return (
     <div className="glass rounded-xl p-4 border border-[var(--border)]">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="text-[10px] font-mono uppercase tracking-[0.25em] text-muted-foreground">
-          Backtester · Replay live buffer ({sample} ticks)
+          Backtester · {source === "LIVE" ? `Live buffer (${sample} ticks)` : `Stored ${market} (${sample} / ${totalStored} total)`}
         </div>
-        <button
-          onClick={run}
-          disabled={running || sample < 50}
-          className="px-4 py-1.5 rounded-md font-mono text-[10px] uppercase tracking-widest font-bold bg-gradient-to-b from-[var(--gold-soft)] to-[var(--gold)] text-black disabled:opacity-40 hover:brightness-110"
-        >
-          {running ? "Replaying…" : sample < 50 ? "Need ≥ 50 ticks" : "Run backtest"}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setSource("LIVE")}
+            className={`px-2 py-1 rounded text-[9px] font-mono uppercase tracking-widest ${
+              source === "LIVE" ? "bg-[var(--gold)] text-black" : "bg-[var(--surface-2)] text-muted-foreground"
+            }`}
+          >Live</button>
+          <button
+            onClick={() => setSource("STORED")}
+            className={`px-2 py-1 rounded text-[9px] font-mono uppercase tracking-widest ${
+              source === "STORED" ? "bg-[var(--gold)] text-black" : "bg-[var(--surface-2)] text-muted-foreground"
+            }`}
+          >Stored</button>
+        </div>
       </div>
+
+      {source === "STORED" && (
+        <div className="mb-3 flex items-center gap-1 flex-wrap">
+          {SCAN_MARKETS.map((m) => (
+            <button
+              key={m}
+              onClick={() => setMarket(m)}
+              className={`px-2 py-1 rounded text-[10px] font-mono ${
+                market === m ? "bg-[var(--gold)] text-black" : "bg-[var(--surface-2)] text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m.replace("R_", "V")} · {stored[m] ?? 0}
+            </button>
+          ))}
+          <button
+            onClick={async () => { await clearTicks(); setStored({}); }}
+            className="ml-auto px-2 py-1 rounded text-[9px] font-mono uppercase tracking-widest text-muted-foreground hover:text-[oklch(0.62_0.22_25)]"
+          >Clear all</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
         <Num label="Stake $" value={stake} setValue={setStake} min={0.35} step={0.5} />
@@ -65,6 +116,14 @@ export function Backtester() {
         <Num label="Min Interval ticks" value={minInterval} setValue={setMinInterval} min={1} step={1} />
         <Num label="Max Loss Streak" value={maxLossStreak} setValue={setMaxLossStreak} min={1} step={1} />
       </div>
+
+      <button
+        onClick={run}
+        disabled={running || sample < 50}
+        className="mt-3 w-full px-4 py-2 rounded-md font-mono text-[10px] uppercase tracking-widest font-bold bg-gradient-to-b from-[var(--gold-soft)] to-[var(--gold)] text-black disabled:opacity-40 hover:brightness-110"
+      >
+        {running ? "Replaying…" : sample < 50 ? "Need ≥ 50 ticks" : `Run backtest on ${sample} ticks`}
+      </button>
 
       {result && (
         <div className="mt-4 pt-4 border-t border-[var(--border)]">
@@ -76,10 +135,10 @@ export function Backtester() {
             <Stat label="Wins" value={String(result.wins)} tone="text-[oklch(0.72_0.17_145)]" />
             <Stat label="Losses" value={String(result.losses)} tone="text-[oklch(0.62_0.22_25)]" />
             <Stat label="Max DD" value={`$${result.maxDrawdown.toFixed(2)}`} />
-            <Stat label="Signal/1k" value={result.signalRate.toFixed(1)} />
+            <Stat label="Profit Factor" value={isFinite(result.profitFactor) ? result.profitFactor.toFixed(2) : "∞"} />
           </div>
           <div className="mt-3 text-[10px] font-mono text-muted-foreground/70 leading-snug">
-            Replayed {result.ticksAnalysed} historical ticks · payout assumed 9× stake · trades are simulated, not executed.
+            Replayed {result.ticksAnalysed} ticks · {result.signalRate.toFixed(1)} signals / 1k ticks · payout assumed 9× stake · simulated, not executed.
           </div>
         </div>
       )}
