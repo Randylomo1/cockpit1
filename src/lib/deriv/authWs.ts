@@ -38,6 +38,14 @@ export interface AuthBalance {
   currency: string;
 }
 
+/** A sibling account discovered via `account_list` after authorize. */
+export interface DiscoveredAccount {
+  loginid: string;
+  currency: string;
+  is_virtual: boolean;
+  landing_company_name?: string;
+}
+
 export interface TradeTimings {
   tickReceivedAt?: number;   // ms epoch when triggering tick arrived
   signalAt?: number;         // ms epoch when signal was selected
@@ -83,10 +91,12 @@ export class DerivAuthClient {
   private balance: AuthBalance | null = null;
   private balanceSubId: string | null = null;
   private lastApiResponseAt: number | null = null;
+  private discoveredAccounts: DiscoveredAccount[] = [];
 
   private statusListeners = new Set<Listener<{ status: AuthStatus; error?: string }>>();
   private accountListeners = new Set<Listener<AuthAccount | null>>();
   private balanceListeners = new Set<Listener<AuthBalance | null>>();
+  private discoveryListeners = new Set<Listener<DiscoveredAccount[]>>();
   private contractListeners = new Map<number, (msg: any) => void>();
   private lastTradeTimings: TradeTimings | null = null;
   private tradeTimingsListeners = new Set<Listener<TradeTimings | null>>();
@@ -101,6 +111,13 @@ export class DerivAuthClient {
   getRedactedToken() { return this.token ? REDACT(this.token) : null; }
   getToken() { return this.token; }
   getLastTradeTimings() { return this.lastTradeTimings; }
+  getDiscoveredAccounts() { return this.discoveredAccounts; }
+
+  onDiscoveredAccounts(l: Listener<DiscoveredAccount[]>) {
+    this.discoveryListeners.add(l); l(this.discoveredAccounts);
+    return () => this.discoveryListeners.delete(l);
+  }
+
 
   onTradeTimings(l: Listener<TradeTimings | null>) {
     this.tradeTimingsListeners.add(l); l(this.lastTradeTimings);
@@ -274,6 +291,17 @@ export class DerivAuthClient {
           landing_company_name: a.landing_company_name,
           fullname: a.fullname,
         };
+        // Phase A: account_list returns ALL accounts (Demo + Real siblings).
+        const acctList: DiscoveredAccount[] = Array.isArray(a.account_list)
+          ? a.account_list.map((x: any) => ({
+              loginid: x.loginid,
+              currency: x.currency,
+              is_virtual: x.is_virtual === 1 || x.is_virtual === true,
+              landing_company_name: x.landing_company_name,
+            }))
+          : [{ loginid: this.account.loginid, currency: this.account.currency, is_virtual: this.account.is_virtual }];
+        this.discoveredAccounts = acctList;
+        this.discoveryListeners.forEach((l) => { try { l(acctList); } catch {} });
         this.accountListeners.forEach((l) => l(this.account));
         this.reconnectAttempts = 0;
         this.setStatus("CONNECTED");

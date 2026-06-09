@@ -33,7 +33,13 @@ interface Perf {
   losses: number;
   netPnL: number;
   consecLosses: number;
+  totalLatencyMs: number; // sum of totalMs from each settled order — drives Avg Latency
 }
+
+type TradeStatus = "SCANNING" | "WAITING" | "QUALIFIED" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED";
+
+interface CheckItem { key: string; label: string; ok: boolean; detail?: string }
+
 
 export function MatchIntelligence() {
   const { activeMarket, digits, lastTick } = useCockpit();
@@ -64,11 +70,20 @@ export function MatchIntelligence() {
 
   // ─── Performance ──────────────────────────────────────────────────────────
   const [perf, setPerf] = useState<Perf>({
-    trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0,
+    trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0, totalLatencyMs: 0,
   });
-  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("ANALYZING");
+  const [startingBalance, setStartingBalance] = useState<number | null>(null);
+  const [tradeStatus, setTradeStatus] = useState<TradeStatus>("SCANNING");
   const [pausedReason, setPausedReason] = useState<string | null>(null);
   const [lastTimings, setLastTimings] = useState<TradeTimings | null>(null);
+
+  // Capture starting balance on first known balance for the active account.
+  useEffect(() => {
+    if (balance && startingBalance == null) setStartingBalance(balance.balance);
+  }, [balance, startingBalance]);
+  // Reset starting balance when the active account changes (loginid switch).
+  useEffect(() => { setStartingBalance(null); }, [account?.loginid]);
+
 
   // Subscribe to live latency emitted by buyMatch()
   useEffect(() => {
@@ -158,6 +173,7 @@ export function MatchIntelligence() {
           losses: p.losses + (win ? 0 : 1),
           netPnL: p.netPnL + settled.profit,
           consecLosses: win ? 0 : p.consecLosses + 1,
+          totalLatencyMs: p.totalLatencyMs + res.timings.totalMs,
         }));
         if (dbId != null) updateTradeOutcome(dbId, { outcome: win ? "WIN" : "LOSS", profit: settled.profit }).catch(() => {});
         setTradeStatus("SETTLED");
@@ -167,16 +183,17 @@ export function MatchIntelligence() {
       } catch (e: any) {
         if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
         toast.error("Settlement tracking lost", { description: String(e?.message ?? e) });
-        setTradeStatus("IDLE");
+        setTradeStatus("SCANNING");
       }
     } catch (e: any) {
       if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
       toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
-      setTradeStatus("IDLE");
+      setTradeStatus("SCANNING");
     } finally {
       inFlight.current = false;
     }
   };
+
 
   // ─── Auto-trade loop: react to high-confidence scans ──────────────────────
   useEffect(() => {
@@ -197,10 +214,10 @@ export function MatchIntelligence() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit, isReal, realConfirmed]);
 
-  // Reset to ANALYZING after a settlement so the UI clearly returns to live scan.
+  // Return to SCANNING after a settlement so the UI clearly resumes scanning.
   useEffect(() => {
     if (tradeStatus === "SETTLED") {
-      const t = setTimeout(() => setTradeStatus("ANALYZING"), 1500);
+      const t = setTimeout(() => setTradeStatus("SCANNING"), 1500);
       return () => clearTimeout(t);
     }
   }, [tradeStatus]);
@@ -211,9 +228,10 @@ export function MatchIntelligence() {
   };
 
   const resetSession = () => {
-    setPerf({ trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0 });
+    setPerf({ trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0, totalLatencyMs: 0 });
+    setStartingBalance(balance?.balance ?? null);
     setPausedReason(null);
-    setTradeStatus("IDLE");
+    setTradeStatus("SCANNING");
     toast.success("Session reset");
   };
 
@@ -228,17 +246,44 @@ export function MatchIntelligence() {
     : "border-[var(--border)]";
 
   const winRate = perf.trades > 0 ? (perf.wins / perf.trades) * 100 : 0;
+  const avgLatencyMs = perf.trades > 0 ? Math.round(perf.totalLatencyMs / perf.trades) : 0;
   const pnlColor = perf.netPnL > 0 ? "text-[oklch(0.72_0.17_145)]"
     : perf.netPnL < 0 ? "text-[oklch(0.62_0.22_25)]" : "text-foreground";
 
-  const statusBadge = {
-    IDLE: "text-muted-foreground",
-    ANALYZING: "text-muted-foreground",
+  // Auto-advance status from SCANNING → QUALIFIED when a high-confidence signal exists.
+  useEffect(() => {
+    setTradeStatus((cur) => {
+      if (cur === "EXECUTING" || cur === "OPEN" || cur === "SETTLED" || cur === "PAUSED") return cur;
+      if (scan.highConfidence && showDigit) return "QUALIFIED";
+      return "SCANNING";
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.highConfidence, showDigit?.digit]);
+
+
+  const statusBadge: Record<TradeStatus, string> = {
+    SCANNING: "text-muted-foreground",
+    WAITING: "text-muted-foreground",
+    QUALIFIED: "text-[oklch(0.72_0.17_145)]",
     EXECUTING: "text-[oklch(0.85_0.18_85)]",
     OPEN: "text-[oklch(0.85_0.18_85)]",
     SETTLED: "text-foreground",
     PAUSED: "text-[oklch(0.62_0.22_25)]",
-  }[tradeStatus];
+  };
+  const statusTone = statusBadge[tradeStatus];
+
+  // ─── Pre-trade validation checklist (Phase D) ────────────────────────────
+  const validation: CheckItem[] = [
+    { key: "ws", label: "WebSocket connected", ok: accountConnected, detail: accountStatus },
+    { key: "auth", label: "Account authorized", ok: accountConnected && !!account, detail: account?.loginid },
+    { key: "bal", label: "Balance available", ok: !!balance && balance.balance > stake, detail: balance ? `${balance.balance.toFixed(2)} ${balance.currency}` : "—" },
+    { key: "mkt", label: "Market feed live", ok: !!tick, detail: tick ? activeMarket : "no tick yet" },
+    { key: "sig", label: "Signal qualified", ok: scan.highConfidence, detail: showDigit ? `score ${showDigit.score}/${HIGH_CONF_THRESHOLD}` : "—" },
+    { key: "rsk", label: "Risk gate clear", ok: !checkRiskGate(), detail: checkRiskGate() ?? "ok" },
+    { key: "real", label: isReal ? "Real-trade confirmed" : "Trading not paused", ok: isReal ? realConfirmed : tradeStatus !== "PAUSED", detail: isReal ? (realConfirmed ? "confirmed" : "checkbox required") : tradeStatus },
+  ];
+  const allChecksPass = validation.every((v) => v.ok);
+
 
   return (
     <div className={`glass rounded-xl p-5 border-2 ${borderClass} transition-all duration-200`}>
@@ -248,22 +293,53 @@ export function MatchIntelligence() {
           Match Intelligence · Real-Time Scanner
         </div>
         <div className="flex items-center gap-4">
-          <div className={`text-[10px] font-mono uppercase tracking-widest ${statusBadge}`}>
+          <div className={`text-[10px] font-mono uppercase tracking-widest ${statusTone}`}>
             ◉ {tradeStatus}{pausedReason ? ` — ${pausedReason}` : ""}
           </div>
           <div className={`text-[10px] font-mono uppercase tracking-widest ${entryColor}`}>
             ● {scan.entry}
           </div>
+          {account && (
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+              ACTIVE · <span className={account.is_virtual ? "text-[oklch(0.85_0.18_85)]" : "text-[oklch(0.85_0.16_150)]"}>
+                {account.is_virtual ? "DEMO" : "REAL"}
+              </span> · {account.loginid}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Live execution-latency strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
-        <LatencyTile label="Proposal" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
-        <LatencyTile label="Buy" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
-        <LatencyTile label="Total Execution" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
-        <LatencyTile label="Last Trade" value={lastTimings ? `${Math.max(0, Math.round((Date.now() - lastTimings.at) / 1000))}s ago` : "no trades yet"} />
+      {/* Live 6-stage execution-latency strip (Phase G) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+        <LatencyTile label="Tick→Signal" value={lastTimings?.tickReceivedAt && lastTimings?.signalAt ? `${Math.max(0, lastTimings.signalAt - lastTimings.tickReceivedAt)} ms` : "—"} good={null} />
+        <LatencyTile label="Signal→Proposal" value={lastTimings ? `~0 ms` : "—"} good={null} />
+        <LatencyTile label="Proposal RT" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
+        <LatencyTile label="Buy RT" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
+        <LatencyTile label="Signal→Buy" value={lastTimings?.signalToOrderMs != null ? `${lastTimings.signalToOrderMs} ms` : "—"} good={lastTimings?.signalToOrderMs != null ? lastTimings.signalToOrderMs < 600 : null} />
+        <LatencyTile label="Total Exec" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
       </div>
+
+      {/* Pre-trade validation checklist (Phase D) */}
+      <div className="mb-4 rounded-md border border-[var(--border)] bg-[var(--surface-2)]/30 p-3">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2 flex items-center justify-between">
+          <span>Pre-Trade Validation · 7 checks</span>
+          <span className={allChecksPass ? "text-[oklch(0.72_0.17_145)]" : "text-[oklch(0.85_0.18_85)]"}>
+            {allChecksPass ? "ALL CLEAR" : `${validation.filter((v) => v.ok).length}/${validation.length} pass`}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-1.5">
+          {validation.map((v) => (
+            <div key={v.key} className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border ${
+              v.ok ? "border-[oklch(0.72_0.17_145)]/30 text-foreground" : "border-[var(--destructive)]/40 text-[var(--destructive)]"
+            }`}>
+              <span>{v.ok ? "✓" : "✗"}</span>
+              <span className="flex-1 truncate">{v.label}</span>
+              {v.detail && <span className="text-muted-foreground truncate">{v.detail}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+
 
       <div className="grid grid-cols-[auto_1fr] gap-6 items-center">
         <div className="text-center">
@@ -331,14 +407,24 @@ export function MatchIntelligence() {
         </div>
       )}
 
-      {/* Performance */}
-      <div className="mt-4 pt-4 border-t border-[var(--border)] grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <Stat label="Trades" value={String(perf.trades)} />
-        <Stat label="Wins" value={String(perf.wins)} tone="text-[oklch(0.72_0.17_145)]" />
-        <Stat label="Losses" value={String(perf.losses)} tone="text-[oklch(0.62_0.22_25)]" />
-        <Stat label="Win Rate" value={`${winRate.toFixed(0)}%`} />
-        <Stat label="Net P/L" value={`${perf.netPnL >= 0 ? "+" : ""}$${perf.netPnL.toFixed(2)}`} tone={pnlColor} />
+      {/* Session Performance (Phase I) */}
+      <div className="mt-4 pt-4 border-t border-[var(--border)]">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">
+          Session Performance · {account ? (account.is_virtual ? "DEMO" : "REAL") : "—"} {account?.loginid ?? ""}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          <Stat label="Starting Bal" value={startingBalance != null ? `$${startingBalance.toFixed(2)}` : "—"} />
+          <Stat label="Current Bal" value={balance ? `$${balance.balance.toFixed(2)}` : "—"} />
+          <Stat label="Trades" value={String(perf.trades)} />
+          <Stat label="Wins" value={String(perf.wins)} tone="text-[oklch(0.72_0.17_145)]" />
+          <Stat label="Losses" value={String(perf.losses)} tone="text-[oklch(0.62_0.22_25)]" />
+          <Stat label="Win Rate" value={`${winRate.toFixed(0)}%`} />
+          <Stat label="Avg Latency" value={avgLatencyMs ? `${avgLatencyMs} ms` : "—"} />
+          <Stat label="Net P/L" value={`${perf.netPnL >= 0 ? "+" : ""}$${perf.netPnL.toFixed(2)}`} tone={pnlColor} />
+        </div>
       </div>
+
+
 
       {/* Top 3 ranking */}
       <div className="mt-4 pt-4 border-t border-[var(--border)]">
