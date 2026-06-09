@@ -77,7 +77,7 @@ class DerivAuthPool {
     let entry = this.entries.get(tk);
     if (!entry) {
       const client = new DerivAuthClient();
-      entry = { token: tk, label, client, status: "DISCONNECTED", account: null, balance: null };
+      entry = { token: tk, label, client, status: "DISCONNECTED", account: null, balance: null, discovered: [] };
       this.entries.set(tk, entry);
       client.onStatus(({ status, error }) => {
         const e = this.entries.get(tk);
@@ -90,7 +90,6 @@ class DerivAuthPool {
         const e = this.entries.get(tk);
         if (!e) return;
         e.account = a;
-        // Persist as a saved account so the session-storage list stays in sync
         if (a) {
           upsertSavedAccount({
             label: e.label || (a.is_virtual ? "Demo" : "Real"),
@@ -109,15 +108,32 @@ class DerivAuthPool {
         e.balance = b;
         this.emit();
       });
+      client.onDiscoveredAccounts((list) => {
+        const e = this.entries.get(tk);
+        if (!e) return;
+        e.discovered = list;
+        this.emit();
+      });
     } else {
       entry.label = label || entry.label;
     }
-    await entry.client.connect(tk);
-    // If no active token yet, prefer this one. Demo is auto-preferred when present.
-    if (!this.activeToken) this.setActive(tk);
+    const live = this.entries.get(tk)!;
+    await live.client.connect(tk);
+    // Demo-first: prefer a connected Demo as the active trading account whenever possible.
+    const demo = this.list().find((e) => e.account?.is_virtual === true);
+    if (!this.activeToken) {
+      this.setActive(demo?.token ?? tk);
+    } else {
+      const activeEntry = this.entries.get(this.activeToken);
+      if (demo && activeEntry?.account?.is_virtual === false) {
+        // Auto-switch from a real account to a freshly-connected demo (safer default).
+        this.setActive(demo.token);
+      }
+    }
     this.emit();
-    return entry;
+    return live;
   }
+
 
   remove(token: string) {
     const entry = this.entries.get(token);
