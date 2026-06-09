@@ -293,22 +293,53 @@ export function MatchIntelligence() {
           Match Intelligence · Real-Time Scanner
         </div>
         <div className="flex items-center gap-4">
-          <div className={`text-[10px] font-mono uppercase tracking-widest ${statusBadge}`}>
+          <div className={`text-[10px] font-mono uppercase tracking-widest ${statusTone}`}>
             ◉ {tradeStatus}{pausedReason ? ` — ${pausedReason}` : ""}
           </div>
           <div className={`text-[10px] font-mono uppercase tracking-widest ${entryColor}`}>
             ● {scan.entry}
           </div>
+          {account && (
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+              ACTIVE · <span className={account.is_virtual ? "text-[oklch(0.85_0.18_85)]" : "text-[oklch(0.85_0.16_150)]"}>
+                {account.is_virtual ? "DEMO" : "REAL"}
+              </span> · {account.loginid}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Live execution-latency strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
-        <LatencyTile label="Proposal" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
-        <LatencyTile label="Buy" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
-        <LatencyTile label="Total Execution" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
-        <LatencyTile label="Last Trade" value={lastTimings ? `${Math.max(0, Math.round((Date.now() - lastTimings.at) / 1000))}s ago` : "no trades yet"} />
+      {/* Live 6-stage execution-latency strip (Phase G) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+        <LatencyTile label="Tick→Signal" value={lastTimings?.tickReceivedAt && lastTimings?.signalAt ? `${Math.max(0, lastTimings.signalAt - lastTimings.tickReceivedAt)} ms` : "—"} good={null} />
+        <LatencyTile label="Signal→Proposal" value={lastTimings ? `~0 ms` : "—"} good={null} />
+        <LatencyTile label="Proposal RT" value={lastTimings ? `${lastTimings.proposalMs} ms` : "—"} good={lastTimings ? lastTimings.proposalMs < 250 : null} />
+        <LatencyTile label="Buy RT" value={lastTimings ? `${lastTimings.buyMs} ms` : "—"} good={lastTimings ? lastTimings.buyMs < 250 : null} />
+        <LatencyTile label="Signal→Buy" value={lastTimings?.signalToOrderMs != null ? `${lastTimings.signalToOrderMs} ms` : "—"} good={lastTimings?.signalToOrderMs != null ? lastTimings.signalToOrderMs < 600 : null} />
+        <LatencyTile label="Total Exec" value={lastTimings ? `${lastTimings.totalMs} ms` : "—"} good={lastTimings ? lastTimings.totalMs < 500 : null} />
       </div>
+
+      {/* Pre-trade validation checklist (Phase D) */}
+      <div className="mb-4 rounded-md border border-[var(--border)] bg-[var(--surface-2)]/30 p-3">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2 flex items-center justify-between">
+          <span>Pre-Trade Validation · 7 checks</span>
+          <span className={allChecksPass ? "text-[oklch(0.72_0.17_145)]" : "text-[oklch(0.85_0.18_85)]"}>
+            {allChecksPass ? "ALL CLEAR" : `${validation.filter((v) => v.ok).length}/${validation.length} pass`}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-1.5">
+          {validation.map((v) => (
+            <div key={v.key} className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded border ${
+              v.ok ? "border-[oklch(0.72_0.17_145)]/30 text-foreground" : "border-[var(--destructive)]/40 text-[var(--destructive)]"
+            }`}>
+              <span>{v.ok ? "✓" : "✗"}</span>
+              <span className="flex-1 truncate">{v.label}</span>
+              {v.detail && <span className="text-muted-foreground truncate">{v.detail}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+
 
       <div className="grid grid-cols-[auto_1fr] gap-6 items-center">
         <div className="text-center">
