@@ -407,14 +407,24 @@ export function MatchIntelligence() {
         </div>
       )}
 
-      {/* Performance */}
-      <div className="mt-4 pt-4 border-t border-[var(--border)] grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <Stat label="Trades" value={String(perf.trades)} />
-        <Stat label="Wins" value={String(perf.wins)} tone="text-[oklch(0.72_0.17_145)]" />
-        <Stat label="Losses" value={String(perf.losses)} tone="text-[oklch(0.62_0.22_25)]" />
-        <Stat label="Win Rate" value={`${winRate.toFixed(0)}%`} />
-        <Stat label="Net P/L" value={`${perf.netPnL >= 0 ? "+" : ""}$${perf.netPnL.toFixed(2)}`} tone={pnlColor} />
+      {/* Session Performance (Phase I) */}
+      <div className="mt-4 pt-4 border-t border-[var(--border)]">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">
+          Session Performance · {account ? (account.is_virtual ? "DEMO" : "REAL") : "—"} {account?.loginid ?? ""}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          <Stat label="Starting Bal" value={startingBalance != null ? `$${startingBalance.toFixed(2)}` : "—"} />
+          <Stat label="Current Bal" value={balance ? `$${balance.balance.toFixed(2)}` : "—"} />
+          <Stat label="Trades" value={String(perf.trades)} />
+          <Stat label="Wins" value={String(perf.wins)} tone="text-[oklch(0.72_0.17_145)]" />
+          <Stat label="Losses" value={String(perf.losses)} tone="text-[oklch(0.62_0.22_25)]" />
+          <Stat label="Win Rate" value={`${winRate.toFixed(0)}%`} />
+          <Stat label="Avg Latency" value={avgLatencyMs ? `${avgLatencyMs} ms` : "—"} />
+          <Stat label="Net P/L" value={`${perf.netPnL >= 0 ? "+" : ""}$${perf.netPnL.toFixed(2)}`} tone={pnlColor} />
+        </div>
       </div>
+
+
 
       {/* Top 3 ranking */}
       <div className="mt-4 pt-4 border-t border-[var(--border)]">
