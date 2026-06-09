@@ -173,6 +173,7 @@ export function MatchIntelligence() {
           losses: p.losses + (win ? 0 : 1),
           netPnL: p.netPnL + settled.profit,
           consecLosses: win ? 0 : p.consecLosses + 1,
+          totalLatencyMs: p.totalLatencyMs + res.timings.totalMs,
         }));
         if (dbId != null) updateTradeOutcome(dbId, { outcome: win ? "WIN" : "LOSS", profit: settled.profit }).catch(() => {});
         setTradeStatus("SETTLED");
@@ -182,16 +183,17 @@ export function MatchIntelligence() {
       } catch (e: any) {
         if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
         toast.error("Settlement tracking lost", { description: String(e?.message ?? e) });
-        setTradeStatus("IDLE");
+        setTradeStatus("SCANNING");
       }
     } catch (e: any) {
       if (dbId != null) updateTradeOutcome(dbId, { outcome: "ERROR", error: String(e?.message ?? e) }).catch(() => {});
       toast.error("Trade rejected", { id: tid, description: String(e?.message ?? e) });
-      setTradeStatus("IDLE");
+      setTradeStatus("SCANNING");
     } finally {
       inFlight.current = false;
     }
   };
+
 
   // ─── Auto-trade loop: react to high-confidence scans ──────────────────────
   useEffect(() => {
