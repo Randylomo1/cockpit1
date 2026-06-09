@@ -118,16 +118,6 @@ export class DerivAuthClient {
     return () => this.discoveryListeners.delete(l);
   }
 
-  // ──────── public api ────────
-  getStatus() { return this.status; }
-  getStatusError() { return this.statusErr; }
-  getAccount() { return this.account; }
-  getBalance() { return this.balance; }
-  getLatency() { return this.lastLatencyMs; }
-  getLastApiResponseAt() { return this.lastApiResponseAt; }
-  getRedactedToken() { return this.token ? REDACT(this.token) : null; }
-  getToken() { return this.token; }
-  getLastTradeTimings() { return this.lastTradeTimings; }
 
   onTradeTimings(l: Listener<TradeTimings | null>) {
     this.tradeTimingsListeners.add(l); l(this.lastTradeTimings);
