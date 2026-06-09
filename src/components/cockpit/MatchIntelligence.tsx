@@ -33,7 +33,13 @@ interface Perf {
   losses: number;
   netPnL: number;
   consecLosses: number;
+  totalLatencyMs: number; // sum of totalMs from each settled order — drives Avg Latency
 }
+
+type TradeStatus = "SCANNING" | "WAITING" | "QUALIFIED" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED";
+
+interface CheckItem { key: string; label: string; ok: boolean; detail?: string }
+
 
 export function MatchIntelligence() {
   const { activeMarket, digits, lastTick } = useCockpit();
