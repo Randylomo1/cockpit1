@@ -70,11 +70,20 @@ export function MatchIntelligence() {
 
   // ─── Performance ──────────────────────────────────────────────────────────
   const [perf, setPerf] = useState<Perf>({
-    trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0,
+    trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0, totalLatencyMs: 0,
   });
-  const [tradeStatus, setTradeStatus] = useState<"IDLE" | "ANALYZING" | "EXECUTING" | "OPEN" | "SETTLED" | "PAUSED">("ANALYZING");
+  const [startingBalance, setStartingBalance] = useState<number | null>(null);
+  const [tradeStatus, setTradeStatus] = useState<TradeStatus>("SCANNING");
   const [pausedReason, setPausedReason] = useState<string | null>(null);
   const [lastTimings, setLastTimings] = useState<TradeTimings | null>(null);
+
+  // Capture starting balance on first known balance for the active account.
+  useEffect(() => {
+    if (balance && startingBalance == null) setStartingBalance(balance.balance);
+  }, [balance, startingBalance]);
+  // Reset starting balance when the active account changes (loginid switch).
+  useEffect(() => { setStartingBalance(null); }, [account?.loginid]);
+
 
   // Subscribe to live latency emitted by buyMatch()
   useEffect(() => {
