@@ -38,6 +38,14 @@ export interface AuthBalance {
   currency: string;
 }
 
+/** A sibling account discovered via `account_list` after authorize. */
+export interface DiscoveredAccount {
+  loginid: string;
+  currency: string;
+  is_virtual: boolean;
+  landing_company_name?: string;
+}
+
 export interface TradeTimings {
   tickReceivedAt?: number;   // ms epoch when triggering tick arrived
   signalAt?: number;         // ms epoch when signal was selected
