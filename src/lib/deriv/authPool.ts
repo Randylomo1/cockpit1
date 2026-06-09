@@ -165,14 +165,18 @@ class DerivAuthPool {
     if (saved.length === 0) return;
     const prevActive = loadActiveToken();
     for (const a of saved) {
-      // best-effort; do not throw
       this.add(a.token, a.label).catch(() => {});
     }
-    if (prevActive && saved.some((a) => a.token === prevActive)) {
+    // Demo-first: if a saved Demo exists, prefer it over a previously-active Real token.
+    const savedDemo = saved.find((a) => a.isVirtual === true);
+    if (savedDemo) {
+      this.setActive(savedDemo.token);
+    } else if (prevActive && saved.some((a) => a.token === prevActive)) {
       this.setActive(prevActive);
     }
   }
 }
+
 
 let _pool: DerivAuthPool | null = null;
 export function getAuthPool(): DerivAuthPool {
