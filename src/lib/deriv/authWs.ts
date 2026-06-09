@@ -291,6 +291,17 @@ export class DerivAuthClient {
           landing_company_name: a.landing_company_name,
           fullname: a.fullname,
         };
+        // Phase A: account_list returns ALL accounts (Demo + Real siblings).
+        const acctList: DiscoveredAccount[] = Array.isArray(a.account_list)
+          ? a.account_list.map((x: any) => ({
+              loginid: x.loginid,
+              currency: x.currency,
+              is_virtual: x.is_virtual === 1 || x.is_virtual === true,
+              landing_company_name: x.landing_company_name,
+            }))
+          : [{ loginid: this.account.loginid, currency: this.account.currency, is_virtual: this.account.is_virtual }];
+        this.discoveredAccounts = acctList;
+        this.discoveryListeners.forEach((l) => { try { l(acctList); } catch {} });
         this.accountListeners.forEach((l) => l(this.account));
         this.reconnectAttempts = 0;
         this.setStatus("CONNECTED");
