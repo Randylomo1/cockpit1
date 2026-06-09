@@ -11,6 +11,7 @@ import {
   type AuthAccount,
   type AuthBalance,
   type AuthStatus,
+  type DiscoveredAccount,
   loadSavedAccounts,
   loadActiveToken,
   persistActiveToken,
@@ -26,6 +27,7 @@ export interface PoolEntry {
   error?: string;
   account: AuthAccount | null;
   balance: AuthBalance | null;
+  discovered: DiscoveredAccount[];
 }
 
 type Listener = (entries: PoolEntry[], activeToken: string | null) => void;
