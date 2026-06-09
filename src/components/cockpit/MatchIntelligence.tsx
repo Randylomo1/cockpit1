@@ -252,11 +252,14 @@ export function MatchIntelligence() {
 
   // Auto-advance status from SCANNING → QUALIFIED when a high-confidence signal exists.
   useEffect(() => {
-    if (tradeStatus !== "SCANNING" && tradeStatus !== "WAITING") return;
-    if (scan.highConfidence && showDigit) setTradeStatus("QUALIFIED");
-    else if (tradeStatus === "QUALIFIED") setTradeStatus("SCANNING");
+    setTradeStatus((cur) => {
+      if (cur === "EXECUTING" || cur === "OPEN" || cur === "SETTLED" || cur === "PAUSED") return cur;
+      if (scan.highConfidence && showDigit) return "QUALIFIED";
+      return "SCANNING";
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan.highConfidence, showDigit?.digit]);
+
 
   const statusBadge: Record<TradeStatus, string> = {
     SCANNING: "text-muted-foreground",
