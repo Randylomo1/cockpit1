@@ -91,13 +91,32 @@ export class DerivAuthClient {
   private balance: AuthBalance | null = null;
   private balanceSubId: string | null = null;
   private lastApiResponseAt: number | null = null;
+  private discoveredAccounts: DiscoveredAccount[] = [];
 
   private statusListeners = new Set<Listener<{ status: AuthStatus; error?: string }>>();
   private accountListeners = new Set<Listener<AuthAccount | null>>();
   private balanceListeners = new Set<Listener<AuthBalance | null>>();
+  private discoveryListeners = new Set<Listener<DiscoveredAccount[]>>();
   private contractListeners = new Map<number, (msg: any) => void>();
   private lastTradeTimings: TradeTimings | null = null;
   private tradeTimingsListeners = new Set<Listener<TradeTimings | null>>();
+
+  // ──────── public api ────────
+  getStatus() { return this.status; }
+  getStatusError() { return this.statusErr; }
+  getAccount() { return this.account; }
+  getBalance() { return this.balance; }
+  getLatency() { return this.lastLatencyMs; }
+  getLastApiResponseAt() { return this.lastApiResponseAt; }
+  getRedactedToken() { return this.token ? REDACT(this.token) : null; }
+  getToken() { return this.token; }
+  getLastTradeTimings() { return this.lastTradeTimings; }
+  getDiscoveredAccounts() { return this.discoveredAccounts; }
+
+  onDiscoveredAccounts(l: Listener<DiscoveredAccount[]>) {
+    this.discoveryListeners.add(l); l(this.discoveredAccounts);
+    return () => this.discoveryListeners.delete(l);
+  }
 
   // ──────── public api ────────
   getStatus() { return this.status; }
