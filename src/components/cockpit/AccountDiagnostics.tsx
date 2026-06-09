@@ -80,6 +80,29 @@ export function AccountDiagnostics() {
                 <Field k="Balance" v={e.balance ? `${e.balance.balance.toFixed(2)} ${e.balance.currency}` : "—"} highlight />
                 <Field k="Last API" v={ageSec == null ? "—" : `${ageSec}s ago`} />
               </div>
+              {e.discovered.length > 1 && (
+                <div className="mt-2 pt-2 border-t border-[var(--border)]/40">
+                  <div className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
+                    Discovered accounts ({e.discovered.length}) · connect token for any not authorized here
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {e.discovered.map((d) => {
+                      const isThis = d.loginid === e.account?.loginid;
+                      return (
+                        <span key={d.loginid}
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+                            isThis ? "border-[var(--gold)]/60 text-[var(--gold)]"
+                                   : "border-[var(--border)] text-muted-foreground"
+                          }`}>
+                          <span className="font-bold mr-1">{d.is_virtual ? "DEMO" : "REAL"}</span>
+                          {d.loginid} · {d.currency}
+                          {isThis && " ✓"}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {e.error && (
                 <div className="mt-2 flex items-start gap-1.5 text-[10px] text-[var(--destructive)]">
                   <AlertTriangle className="size-3 mt-0.5 shrink-0" />
@@ -93,6 +116,7 @@ export function AccountDiagnostics() {
     </div>
   );
 }
+
 
 function Field({ k, v, highlight }: { k: string; v: string; highlight?: boolean }) {
   return (
