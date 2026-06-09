@@ -214,10 +214,10 @@ export function MatchIntelligence() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan.highConfidence, scan.tickCount, autoTrade, accountConnected, showDigit?.digit, isReal, realConfirmed]);
 
-  // Reset to ANALYZING after a settlement so the UI clearly returns to live scan.
+  // Return to SCANNING after a settlement so the UI clearly resumes scanning.
   useEffect(() => {
     if (tradeStatus === "SETTLED") {
-      const t = setTimeout(() => setTradeStatus("ANALYZING"), 1500);
+      const t = setTimeout(() => setTradeStatus("SCANNING"), 1500);
       return () => clearTimeout(t);
     }
   }, [tradeStatus]);
@@ -228,9 +228,10 @@ export function MatchIntelligence() {
   };
 
   const resetSession = () => {
-    setPerf({ trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0 });
+    setPerf({ trades: 0, wins: 0, losses: 0, netPnL: 0, consecLosses: 0, totalLatencyMs: 0 });
+    setStartingBalance(balance?.balance ?? null);
     setPausedReason(null);
-    setTradeStatus("IDLE");
+    setTradeStatus("SCANNING");
     toast.success("Session reset");
   };
 
@@ -245,17 +246,41 @@ export function MatchIntelligence() {
     : "border-[var(--border)]";
 
   const winRate = perf.trades > 0 ? (perf.wins / perf.trades) * 100 : 0;
+  const avgLatencyMs = perf.trades > 0 ? Math.round(perf.totalLatencyMs / perf.trades) : 0;
   const pnlColor = perf.netPnL > 0 ? "text-[oklch(0.72_0.17_145)]"
     : perf.netPnL < 0 ? "text-[oklch(0.62_0.22_25)]" : "text-foreground";
 
-  const statusBadge = {
-    IDLE: "text-muted-foreground",
-    ANALYZING: "text-muted-foreground",
+  // Auto-advance status from SCANNING → QUALIFIED when a high-confidence signal exists.
+  useEffect(() => {
+    if (tradeStatus !== "SCANNING" && tradeStatus !== "WAITING") return;
+    if (scan.highConfidence && showDigit) setTradeStatus("QUALIFIED");
+    else if (tradeStatus === "QUALIFIED") setTradeStatus("SCANNING");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scan.highConfidence, showDigit?.digit]);
+
+  const statusBadge: Record<TradeStatus, string> = {
+    SCANNING: "text-muted-foreground",
+    WAITING: "text-muted-foreground",
+    QUALIFIED: "text-[oklch(0.72_0.17_145)]",
     EXECUTING: "text-[oklch(0.85_0.18_85)]",
     OPEN: "text-[oklch(0.85_0.18_85)]",
     SETTLED: "text-foreground",
     PAUSED: "text-[oklch(0.62_0.22_25)]",
-  }[tradeStatus];
+  };
+  const statusTone = statusBadge[tradeStatus];
+
+  // ─── Pre-trade validation checklist (Phase D) ────────────────────────────
+  const validation: CheckItem[] = [
+    { key: "ws", label: "WebSocket connected", ok: accountConnected, detail: accountStatus },
+    { key: "auth", label: "Account authorized", ok: accountConnected && !!account, detail: account?.loginid },
+    { key: "bal", label: "Balance available", ok: !!balance && balance.balance > stake, detail: balance ? `${balance.balance.toFixed(2)} ${balance.currency}` : "—" },
+    { key: "mkt", label: "Market feed live", ok: !!tick, detail: tick ? activeMarket : "no tick yet" },
+    { key: "sig", label: "Signal qualified", ok: scan.highConfidence, detail: showDigit ? `score ${showDigit.score}/${HIGH_CONF_THRESHOLD}` : "—" },
+    { key: "rsk", label: "Risk gate clear", ok: !checkRiskGate(), detail: checkRiskGate() ?? "ok" },
+    { key: "real", label: isReal ? "Real-trade confirmed" : "Trading not paused", ok: isReal ? realConfirmed : tradeStatus !== "PAUSED", detail: isReal ? (realConfirmed ? "confirmed" : "checkbox required") : tradeStatus },
+  ];
+  const allChecksPass = validation.every((v) => v.ok);
+
 
   return (
     <div className={`glass rounded-xl p-5 border-2 ${borderClass} transition-all duration-200`}>
